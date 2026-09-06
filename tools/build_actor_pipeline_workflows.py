@@ -334,7 +334,10 @@ def build_finalizer(strategy, refine_prompt, use_preview, denoise=None):
             "render_size": 832,
             "steps": 18,
             "reference_size": 512,
-            "clip_name": "qwen_3_4b.safetensors",
+            # MiracleIn expects the 12288-wide conditioning produced by the
+            # 8B Flux.2 encoder. The 4B encoder emits width 7680 and fails in
+            # the transformer's txt_in projection at the first sampling step.
+            "clip_name": "qwen_3_8b.safetensors",
         }
     renderer_id, renderer_def = miracle_renderer_subgraph(
         f"renderer-{strategy}", use_preview, **renderer_options
