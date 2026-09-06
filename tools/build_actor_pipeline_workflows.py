@@ -159,11 +159,13 @@ def prompt_refiner_subgraph():
     )
 
 
-def miracle_renderer_subgraph(name, use_preview):
+def miracle_renderer_subgraph(name, use_preview, render_size=1024, steps=26,
+                              reference_size=768, clip_name="qwen_3_8b.safetensors"):
     graph_id = stable_id(name)
     graph = base.Graph(object_links=True)
     model = graph.add(base.clean_node("UNETLoader", 401, "MiracleIn 309B FP8", (-450, 550), ["miraclein309bFp8.aUKt.safetensors", "default"]))
-    clip = graph.add(base.clean_node("CLIPLoader", 402, "Qwen 3 8B Flux encoder", (-450, 700), ["qwen_3_8b.safetensors", "flux2", "default"]))
+    clip_size = "4B" if "4b" in clip_name.lower() else "8B"
+    clip = graph.add(base.clean_node("CLIPLoader", 402, f"Qwen 3 {clip_size} Flux encoder", (-450, 700), [clip_name, "flux2", "default"]))
     vae = graph.add(base.clean_node("VAELoader", 403, "Flux.2 VAE", (-450, 850), ["flux2-vae.safetensors"]))
     encode = graph.add(base.clean_node("CLIPTextEncode", 404, "Encode final prompt", (0, 540), [""]))
     zero = graph.add(base.clean_node("ConditioningZeroOut", 405, "Zero negative", (300, 680)))
@@ -171,7 +173,7 @@ def miracle_renderer_subgraph(name, use_preview):
     positive, negative = encode, zero
     for index, input_slot in enumerate((0, 1, 2)):
         x = -300 + index * 360
-        scale = graph.add(base.clean_node("ImageScaleToMaxDimension", 406 + index * 4, f"Actor {'ABC'[index]} max 768", (x, -130), ["lanczos", 768]))
+        scale = graph.add(base.clean_node("ImageScaleToMaxDimension", 406 + index * 4, f"Actor {'ABC'[index]} max {reference_size}", (x, -130), ["lanczos", reference_size]))
         vae_encode = graph.add(base.clean_node("VAEEncode", 407 + index * 4, f"Encode actor {'ABC'[index]}", (x, 20)))
         pos_ref = graph.add(base.clean_node("ReferenceLatent", 408 + index * 4, f"Positive actor {'ABC'[index]}", (x, 150)))
         neg_ref = graph.add(base.clean_node("ReferenceLatent", 409 + index * 4, f"Negative actor {'ABC'[index]}", (x, 260)))
@@ -183,7 +185,7 @@ def miracle_renderer_subgraph(name, use_preview):
         graph.connect(vae_encode["id"], 0, pos_ref["id"], "latent", "LATENT")
         graph.connect(vae_encode["id"], 0, neg_ref["id"], "latent", "LATENT")
         positive, negative = pos_ref, neg_ref
-    scheduler = graph.add(base.clean_node("Flux2Scheduler", 418, "1024px 26-step schedule", (850, 610), [26, 1024, 1024]))
+    scheduler = graph.add(base.clean_node("Flux2Scheduler", 418, f"{render_size}px {steps}-step schedule", (850, 610), [steps, render_size, render_size]))
     noise = graph.add(base.clean_node("RandomNoise", 419, "Final noise", (850, 760), [0, "fixed"]))
     sampler = graph.add(base.clean_node("KSamplerSelect", 420, "Euler", (850, 900), ["euler"]))
     guider = graph.add(base.clean_node("CFGGuider", 421, "MiracleIn guidance", (1220, 510), [1.1]))
@@ -196,7 +198,7 @@ def miracle_renderer_subgraph(name, use_preview):
     graph.connect(-10, prompt_slot, encode["id"], "text", "STRING")
     graph.connect(-10, seed_slot, noise["id"], "noise_seed", "INT")
     if use_preview:
-        preview_scale = graph.add(base.clean_node("ImageScaleToMaxDimension", 422, "Selected sketch to 1024", (850, 40), ["lanczos", 1024]))
+        preview_scale = graph.add(base.clean_node("ImageScaleToMaxDimension", 422, f"Selected sketch to {render_size}", (850, 40), ["lanczos", render_size]))
         latent = graph.add(base.clean_node("VAEEncode", 423, "Encode selected sketch", (1190, 60)))
         split = graph.add(story_node(
             "SplitSigmasDenoise", 424, "Partial-denoise schedule", (1190, 250),
@@ -210,7 +212,7 @@ def miracle_renderer_subgraph(name, use_preview):
         graph.connect(-10, 6, split["id"], "denoise", "FLOAT")
         sigmas, sigmas_slot = split, 1
     else:
-        latent = graph.add(base.clean_node("EmptyFlux2LatentImage", 422, "Fresh 1024 x 1024 latent", (1210, 760), [1024, 1024, 1]))
+        latent = graph.add(base.clean_node("EmptyFlux2LatentImage", 422, f"Fresh {render_size} x {render_size} latent", (1210, 760), [render_size, render_size, 1]))
         sigmas, sigmas_slot = scheduler, 0
     sample = graph.add(base.clean_node("SamplerCustomAdvanced", 425, "Final sample", (1550, 580)))
     decode = graph.add(base.clean_node("VAEDecode", 426, "Decode final", (1830, 580)))
@@ -326,7 +328,17 @@ def build_sketch_workflow():
 
 
 def build_finalizer(strategy, refine_prompt, use_preview, denoise=None):
-    renderer_id, renderer_def = miracle_renderer_subgraph(f"renderer-{strategy}", use_preview)
+    renderer_options = {}
+    if strategy == "direct-uplift":
+        renderer_options = {
+            "render_size": 832,
+            "steps": 18,
+            "reference_size": 512,
+            "clip_name": "qwen_3_4b.safetensors",
+        }
+    renderer_id, renderer_def = miracle_renderer_subgraph(
+        f"renderer-{strategy}", use_preview, **renderer_options
+    )
     subgraphs = [renderer_def]
     refiner_id = None
     if refine_prompt:
@@ -334,7 +346,7 @@ def build_finalizer(strategy, refine_prompt, use_preview, denoise=None):
         subgraphs.insert(0, refiner_def)
     graph = base.Graph(object_links=False)
     descriptions = {
-        "direct-uplift": "Uses the original short scene card and the selected sketch as a starting latent at 0.70 denoise. This most strongly preserves the approved sketch composition.",
+        "direct-uplift": "Uses the original short scene card and selected sketch as a starting latent at 0.65 denoise. The balanced 832px, 18-step configuration preserves the approved composition while substantially reducing final-render cost.",
         "fresh-render": "Refines the selected scene card, discards the sketch pixels, and renders from fresh 1024px noise. This maximizes redraw quality but permits composition drift.",
         "hybrid": "Refines the selected scene card and reconstructs from the selected sketch at 0.85 denoise. This keeps broad staging while allowing a much stronger redraw.",
     }
@@ -430,7 +442,7 @@ def build_finalizer(strategy, refine_prompt, use_preview, denoise=None):
 def main():
     workflows = {
         "actor-idea-sketch-batch.json": build_sketch_workflow(),
-        "actor-finalize-direct-uplift.json": build_finalizer("direct-uplift", False, True, 0.70),
+        "actor-finalize-direct-uplift.json": build_finalizer("direct-uplift", False, True, 0.65),
         "actor-finalize-fresh-render.json": build_finalizer("fresh-render", True, False),
         "actor-finalize-hybrid.json": build_finalizer("hybrid", True, True, 0.85),
     }

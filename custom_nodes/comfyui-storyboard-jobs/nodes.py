@@ -555,12 +555,6 @@ class SaveActorCandidateOutput:
     def save(self, finalize_mode, job, image, render_seed, candidate_root,
              prompt=None, extra_pnginfo=None):
         root = _safe_root(candidate_root)
-        inbox = root / "inbox"
-        selected = root / "selected"
-        actors_dir = root / "actors"
-        final_dir = root / "final"
-        for directory in (inbox, selected, actors_dir, final_dir):
-            directory.mkdir(parents=True, exist_ok=True)
 
         job = dict(job)
         candidate_id = job.get("candidate_id") or _new_candidate_id(
@@ -569,10 +563,14 @@ class SaveActorCandidateOutput:
         job["candidate_id"] = candidate_id
 
         if finalize_mode:
-            destination = final_dir / f"{candidate_id}_final.png"
+            # For finalizers, candidate_root is the exact output directory.  The
+            # workflow already names the strategy (for example, direct-uplift),
+            # so adding another fixed "final" layer is redundant.
+            root.mkdir(parents=True, exist_ok=True)
+            destination = root / f"{candidate_id}_final.png"
             counter = 1
             while destination.exists():
-                destination = final_dir / f"{candidate_id}_final_{counter:03d}.png"
+                destination = root / f"{candidate_id}_final_{counter:03d}.png"
                 counter += 1
             payload = _candidate_payload(job, "final", render_seed=render_seed)
             _tensor_to_pil(image).save(
@@ -580,8 +578,13 @@ class SaveActorCandidateOutput:
                 pnginfo=_candidate_pnginfo(payload, prompt, extra_pnginfo),
                 compress_level=4,
             )
-            relative_dir = final_dir.relative_to(Path(folder_paths.get_output_directory()).resolve())
+            relative_dir = root.relative_to(Path(folder_paths.get_output_directory()).resolve())
         else:
+            inbox = root / "inbox"
+            selected = root / "selected"
+            actors_dir = root / "actors"
+            for directory in (inbox, selected, actors_dir):
+                directory.mkdir(parents=True, exist_ok=True)
             actor_set_id = _actor_set_id(job["actor_images"])
             actor_paths = []
             for label, actor_image in zip(("A", "B", "C"), job["actor_images"]):
