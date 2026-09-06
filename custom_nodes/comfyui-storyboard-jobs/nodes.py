@@ -63,6 +63,18 @@ def _new_candidate_id(actor_images, scene_prompt, preview_seed):
     return f"candidate_{stamp}_{int(preview_seed)}_{token}"
 
 
+def _actor_set_id(actor_images):
+    """Return a stable ID for one ordered set of actor images."""
+    digest = hashlib.sha256()
+    for label, image in zip(("A", "B", "C"), actor_images):
+        sample = image[0].detach().cpu().numpy()
+        digest.update(label.encode("ascii"))
+        digest.update(str(sample.shape).encode("ascii"))
+        digest.update(str(sample.dtype).encode("ascii"))
+        digest.update(sample.tobytes())
+    return f"actor_set_{digest.hexdigest()[:16]}"
+
+
 def _metadata(job, mode, render_seed=None, source_path=None):
     return {
         "version": 1,
@@ -108,7 +120,7 @@ def _candidate_pnginfo(payload, prompt=None, extra_pnginfo=None):
 
 def _candidate_payload(job, mode, render_seed=None, preview_path=None):
     return {
-        "version": 1,
+        "version": 2,
         "candidate_id": job["candidate_id"],
         "mode": mode,
         "created_utc": job.get("created_utc"),
@@ -118,6 +130,7 @@ def _candidate_payload(job, mode, render_seed=None, preview_path=None):
         "preview_seed": int(job.get("preview_seed", 0)),
         "render_seed": None if render_seed is None else int(render_seed),
         "settings": job.get("settings", {}),
+        "actor_set_id": job.get("actor_set_id", ""),
         "actor_paths": list(job.get("actor_paths", [])),
         "preview_path": str(preview_path or job.get("preview_path", "")),
         "selected_candidate_path": str(job.get("selected_candidate_path", "")),
@@ -569,11 +582,14 @@ class SaveActorCandidateOutput:
             )
             relative_dir = final_dir.relative_to(Path(folder_paths.get_output_directory()).resolve())
         else:
+            actor_set_id = _actor_set_id(job["actor_images"])
             actor_paths = []
             for label, actor_image in zip(("A", "B", "C"), job["actor_images"]):
-                actor_path = actors_dir / f"{candidate_id}_actor_{label}.png"
-                _tensor_to_pil(actor_image).save(actor_path, compress_level=4)
+                actor_path = actors_dir / f"{actor_set_id}_actor_{label}.png"
+                if not actor_path.exists():
+                    _tensor_to_pil(actor_image).save(actor_path, compress_level=4)
                 actor_paths.append(str(actor_path))
+            job["actor_set_id"] = actor_set_id
             job["actor_paths"] = actor_paths
 
             destination = inbox / f"{candidate_id}.png"
