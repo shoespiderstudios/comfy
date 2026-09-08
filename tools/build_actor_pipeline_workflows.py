@@ -121,12 +121,14 @@ def vision_director_subgraph():
     graph.connect(-10, 4, parse["id"], "requested_count", "INT")
     for slot in range(4):
         graph.connect(parse["id"], slot, -20, slot, ("STRING", "STRING", "INT", "STRING")[slot])
+    graph.connect(generate["id"], 0, -20, 4, "STRING")
     return graph_id, base.make_subgraph(
         graph_id,
         "One-pass 4B vision director - casting inventory plus scene batch",
         [("actor_a", "IMAGE"), ("actor_b", "IMAGE"), ("actor_c", "IMAGE"),
          ("direction", "STRING"), ("count", "INT"), ("seed", "INT")],
-        [("actor_inventory", "STRING"), ("snapshot", "STRING"), ("count", "INT"), ("summary", "STRING")],
+        [("actor_inventory", "STRING"), ("snapshot", "STRING"), ("count", "INT"), ("summary", "STRING"),
+         ("raw_reply", "STRING")],
         graph,
         2250,
     )
@@ -400,7 +402,8 @@ def build_ultrafast_sketch_workflow():
         3009, director_id, "One-pass actor-aware director", (-100, 30),
         [("actor_a", "IMAGE"), ("actor_b", "IMAGE"), ("actor_c", "IMAGE"),
          ("direction", "STRING"), ("count", "INT"), ("seed", "INT")],
-        [("actor_inventory", "STRING"), ("snapshot", "STRING"), ("count", "INT"), ("summary", "STRING")],
+        [("actor_inventory", "STRING"), ("snapshot", "STRING"), ("count", "INT"), ("summary", "STRING"),
+         ("raw_reply", "STRING")],
         (520, 230)
     ))
     loop = graph.add(base.clean_node("easy forLoopStart", 3010, "Thumbnail loop", (500, 40), [12]))
@@ -448,6 +451,7 @@ def build_ultrafast_sketch_workflow():
     path = graph.add(base.clean_node("PreviewAny", 3017, "Last saved path", (2870, 20), []))
     loop_end = graph.add(base.clean_node("easy forLoopEnd", 3018, "Finish thumbnail batch", (2870, 190), []))
     preview = graph.add(base.clean_node("PreviewImage", 3019, "Last thumbnail", (3210, 150), []))
+    raw_reply = graph.add(base.clean_node("PreviewAny", 3020, "Raw director reply", (500, 340), []))
 
     for actor, slot in zip((actor_a, actor_b, actor_c), range(3)):
         graph.connect(actor["id"], 0, director["id"], slot, "IMAGE")
@@ -456,6 +460,7 @@ def build_ultrafast_sketch_workflow():
     graph.connect(direction["id"], 0, director["id"], "direction", "STRING")
     graph.connect(count["id"], 0, director["id"], "count", "INT")
     graph.connect(director_seed["id"], 0, director["id"], "seed", "INT")
+    graph.connect(director["id"], 4, raw_reply["id"], 0, "*")
     graph.connect(director["id"], 2, loop["id"], 1, "INT")
     graph.connect(director["id"], 1, card["id"], "snapshot", "STRING")
     graph.connect(loop["id"], 1, card["id"], "index", "INT")

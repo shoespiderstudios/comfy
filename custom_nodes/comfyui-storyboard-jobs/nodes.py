@@ -703,8 +703,8 @@ class BuildActorVisionSceneBatchPrompt:
 DIRECTION:
 {direction}
 
-First return exactly one line beginning CAST:. On that line, give each actor's stable visible identity traits in very few words: apparent adult age range, face, hair, skin tone, and build. Ignore the source pose, clothing, expression, and background.
-Then invent exactly {int(count)} distinct photographable scenes using these actors. Return one complete scene per line beginning SCENE 1:, SCENE 2:, and so on. Each scene must briefly identify ACTOR A, ACTOR B, and ACTOR C; give their positions and one clear visible action; then state the setting, camera framing, and lighting. Use simple concrete language. Avoid tangled bodies, unclear limb ownership, impossible joints, mirrors, crowds, fantasy, science fiction, alternatives, analysis, blank lines, and continuation lines."""
+Immediately invent exactly {int(count)} distinct photographable scenes using these actors. Put each complete scene on one line beginning SCENE 1:, SCENE 2:, and so on. Put all scene lines first. Limit each scene to 32 words: name ACTOR A, ACTOR B, and ACTOR C; give their positions and one clear visible action; then state setting, framing, and lighting. Use simple concrete language. Avoid tangled bodies, unclear limb ownership, impossible joints, mirrors, crowds, fantasy, science fiction, alternatives, analysis, blank lines, and continuation lines.
+Only after the final scene, optionally add one short line beginning CAST: with stable visible identity traits for each actor. Do not describe source poses, clothing, expressions, or backgrounds."""
         return (prompt,)
 
 
@@ -731,20 +731,45 @@ class ParseActorVisionSceneBatch:
         inventory = cast_match.group(1).strip() if cast_match else (
             "ACTOR A, ACTOR B, and ACTOR C are the three adults stored in the portable actor reference files."
         )
-        cards = [
-            match.group(1).strip().strip('"')
-            for match in re.finditer(r"(?im)^\s*SCENE\s*\d+\s*[:.)-]\s*(.+?)\s*$", text)
-            if match.group(1).strip()
-        ]
+        def extract_after_markers(source, marker_pattern):
+            markers = list(re.finditer(marker_pattern, source, flags=re.IGNORECASE | re.MULTILINE))
+            extracted = []
+            for index, marker in enumerate(markers):
+                end = markers[index + 1].start() if index + 1 < len(markers) else len(source)
+                value = source[marker.end():end]
+                value = re.split(r"(?im)(?:^|\n)\s*(?:CAST|CASTING)\s*:", value, maxsplit=1)[0]
+                value = value.strip().strip('"')
+                if value:
+                    extracted.append(value)
+            return extracted, markers
+
+        cards, scene_markers = extract_after_markers(text, r"(?<!\w)SCENE\s*\d+\s*[:.)-]\s*")
+        mode = "scene labels" if all(
+            text.rfind("\n", 0, marker.start()) + 1 == marker.start() or
+            not text[text.rfind("\n", 0, marker.start()) + 1:marker.start()].strip()
+            for marker in scene_markers
+        ) else "inline scene labels"
+        if not cards:
+            cards, number_markers = extract_after_markers(text, r"(?<!\w)\d+\s*[:.)-]\s+")
+            mode = "numbered lines" if all(
+                not text[text.rfind("\n", 0, marker.start()) + 1:marker.start()].strip()
+                for marker in number_markers
+            ) else "inline numbering"
+        if not cards:
+            mode = "single-reply fallback"
+            fallback = re.sub(r"(?im)^\s*(?:CAST|CASTING)\s*:.*$", "", text).strip()
+            fallback = re.sub(r"<\|[^>]+\|>", "", fallback).strip()
+            if fallback:
+                cards = [fallback.strip('"')]
         count = min(int(requested_count), len(cards))
         cards = cards[:count]
         if not cards:
-            raise ValueError("The combined vision/director reply did not contain any SCENE lines")
+            raise ValueError("The combined vision/director reply was empty after removing formatting markers")
         return (
             inventory,
             json.dumps(cards, ensure_ascii=False),
             len(cards),
-            f"one casting inventory and {len(cards)} scene card(s) parsed",
+            f"one casting inventory and {len(cards)} scene card(s) parsed via {mode}",
         )
 
 

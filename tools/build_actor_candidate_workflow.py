@@ -162,14 +162,16 @@ def make_subgraph(graph_id, name, inputs, outputs, graph, width=2200):
     for index, (field_name, kind) in enumerate(inputs):
         used = [link["id"] for link in graph.links if link["origin_id"] == -10 and link["origin_slot"] == index]
         input_defs.append({
-            "id": str(uuid.uuid4()), "name": field_name, "type": kind, "linkIds": used,
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{graph_id}:input:{index}:{field_name}:{kind}")),
+            "name": field_name, "type": kind, "linkIds": used,
             "pos": [-520, 74 + index * 22],
         })
     output_defs = []
     for index, (field_name, kind) in enumerate(outputs):
         used = [link["id"] for link in graph.links if link["target_id"] == -20 and link["target_slot"] == index]
         output_defs.append({
-            "id": str(uuid.uuid4()), "name": field_name, "type": kind, "linkIds": used,
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{graph_id}:output:{index}:{field_name}:{kind}")),
+            "name": field_name, "type": kind, "linkIds": used,
             "localized_name": field_name, "pos": [width - 120, 94 + index * 22],
         })
     return {
