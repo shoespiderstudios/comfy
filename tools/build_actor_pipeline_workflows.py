@@ -79,8 +79,61 @@ def actor_analyzer_subgraph():
     )
 
 
-def klein_sketch_subgraph():
-    graph_id = stable_id("klein-sketch-384")
+def vision_director_subgraph():
+    """Inventory the actors and produce every scene card in one VLM invocation."""
+    graph_id = stable_id("actor-vision-director-ultrafast")
+    graph = base.Graph(object_links=True)
+    scale_a = graph.add(base.clean_node("ImageScaleToMaxDimension", 101, "Actor A vision copy", (-420, -80), ["lanczos", 256]))
+    scale_b = graph.add(base.clean_node("ImageScaleToMaxDimension", 102, "Actor B vision copy", (-420, 80), ["lanczos", 256]))
+    scale_c = graph.add(base.clean_node("ImageScaleToMaxDimension", 103, "Actor C vision copy", (-420, 240), ["lanczos", 256]))
+    stitch_ab = graph.add(base.clean_node("ImageStitch", 104, "A left, B middle", (-60, 20), ["right", True, 6, "white"]))
+    stitch_c = graph.add(base.clean_node("ImageStitch", 105, "Add C right", (300, 80), ["right", True, 6, "white"]))
+    sheet = graph.add(base.clean_node("ImageScaleToMaxDimension", 106, "Tiny casting sheet", (650, 80), ["lanczos", 448]))
+    clip = graph.add(base.clean_node("CLIPLoader", 107, "Qwen3-VL 4B Heretic", (-300, 500), ["qwen3-vl-4b-heretic_int8.safetensors", "krea2", "default"]))
+    build = graph.add(story_node(
+        "BuildActorVisionSceneBatchPrompt", 108, "One-pass casting + direction request", (650, 370),
+        [("direction", "STRING", False), ("count", "INT", False)], [("prompt", "STRING")], [], (500, 150)
+    ))
+    generate = graph.add(base.clean_node(
+        "TextGenerate", 109, "Inventory and direct once", (1190, 100),
+        ["", 520, "on", 0.9, 40, 0.9, 0.02, 0.5, 1, 0.1, False, True], (480, 350)
+    ))
+    parse = graph.add(story_node(
+        "ParseActorVisionSceneBatch", 110, "Split inventory and scene cards", (1720, 130),
+        [("raw_text", "STRING", False), ("requested_count", "INT", False)],
+        [("actor_inventory", "STRING"), ("snapshot", "STRING"), ("count", "INT"), ("summary", "STRING")],
+        [], (450, 150)
+    ))
+    for slot, target in enumerate((scale_a, scale_b, scale_c)):
+        graph.connect(-10, slot, target["id"], "image", "IMAGE")
+    graph.connect(scale_a["id"], 0, stitch_ab["id"], 0, "IMAGE")
+    graph.connect(scale_b["id"], 0, stitch_ab["id"], 1, "IMAGE")
+    graph.connect(stitch_ab["id"], 0, stitch_c["id"], 0, "IMAGE")
+    graph.connect(scale_c["id"], 0, stitch_c["id"], 1, "IMAGE")
+    graph.connect(stitch_c["id"], 0, sheet["id"], "image", "IMAGE")
+    graph.connect(-10, 3, build["id"], "direction", "STRING")
+    graph.connect(-10, 4, build["id"], "count", "INT")
+    graph.connect(clip["id"], 0, generate["id"], "clip", "CLIP")
+    graph.connect(sheet["id"], 0, generate["id"], "image", "IMAGE")
+    graph.connect(build["id"], 0, generate["id"], "prompt", "STRING")
+    graph.connect(-10, 5, generate["id"], "sampling_mode.seed", "INT")
+    graph.connect(generate["id"], 0, parse["id"], "raw_text", "STRING")
+    graph.connect(-10, 4, parse["id"], "requested_count", "INT")
+    for slot in range(4):
+        graph.connect(parse["id"], slot, -20, slot, ("STRING", "STRING", "INT", "STRING")[slot])
+    return graph_id, base.make_subgraph(
+        graph_id,
+        "One-pass 4B vision director - casting inventory plus scene batch",
+        [("actor_a", "IMAGE"), ("actor_b", "IMAGE"), ("actor_c", "IMAGE"),
+         ("direction", "STRING"), ("count", "INT"), ("seed", "INT")],
+        [("actor_inventory", "STRING"), ("snapshot", "STRING"), ("count", "INT"), ("summary", "STRING")],
+        graph,
+        2250,
+    )
+
+
+def klein_sketch_subgraph(render_size=384, steps=4, variant="standard"):
+    graph_id = stable_id(f"klein-sketch-{render_size}-{steps}-{variant}")
     graph = base.Graph(object_links=True)
     model = graph.add(base.clean_node("UNETLoader", 201, "Flux.2 Klein 4B FP8", (-450, 500), ["flux-2-klein-4b-fp8.safetensors", "default"]))
     clip = graph.add(base.clean_node("CLIPLoader", 202, "Qwen 3 4B Flux encoder", (-450, 650), ["qwen_3_4b.safetensors", "flux2", "default"]))
@@ -91,7 +144,7 @@ def klein_sketch_subgraph():
     positive, negative = encode, zero
     for index, input_slot in enumerate((0, 1, 2)):
         x = -300 + index * 350
-        scale = graph.add(base.clean_node("ImageScaleToMaxDimension", 206 + index * 4, f"Actor {'ABC'[index]} max 384", (x, -130), ["lanczos", 384]))
+        scale = graph.add(base.clean_node("ImageScaleToMaxDimension", 206 + index * 4, f"Actor {'ABC'[index]} max {render_size}", (x, -130), ["lanczos", render_size]))
         vae_encode = graph.add(base.clean_node("VAEEncode", 207 + index * 4, f"Encode actor {'ABC'[index]}", (x, 20)))
         pos_ref = graph.add(base.clean_node("ReferenceLatent", 208 + index * 4, f"Positive actor {'ABC'[index]}", (x, 150)))
         neg_ref = graph.add(base.clean_node("ReferenceLatent", 209 + index * 4, f"Negative actor {'ABC'[index]}", (x, 260)))
@@ -103,12 +156,12 @@ def klein_sketch_subgraph():
         graph.connect(vae_encode["id"], 0, pos_ref["id"], "latent", "LATENT")
         graph.connect(vae_encode["id"], 0, neg_ref["id"], "latent", "LATENT")
         positive, negative = pos_ref, neg_ref
-    scheduler = graph.add(base.clean_node("Flux2Scheduler", 218, "Four-step 384px schedule", (820, 590), [4, 384, 384]))
+    scheduler = graph.add(base.clean_node("Flux2Scheduler", 218, f"{steps}-step {render_size}px schedule", (820, 590), [steps, render_size, render_size]))
     noise = graph.add(base.clean_node("RandomNoise", 219, "Sketch noise", (820, 740), [0, "fixed"]))
     sampler = graph.add(base.clean_node("KSamplerSelect", 220, "Euler", (820, 870), ["euler"]))
     guider = graph.add(base.clean_node("CFGGuider", 221, "Klein guidance", (1160, 500), [1.0]))
-    latent = graph.add(base.clean_node("EmptyFlux2LatentImage", 222, "384 x 384 sketch latent", (1160, 760), [384, 384, 1]))
-    sample = graph.add(base.clean_node("SamplerCustomAdvanced", 223, "Four-step sketch", (1480, 560)))
+    latent = graph.add(base.clean_node("EmptyFlux2LatentImage", 222, f"{render_size} x {render_size} sketch latent", (1160, 760), [render_size, render_size, 1]))
+    sample = graph.add(base.clean_node("SamplerCustomAdvanced", 223, f"{steps}-step sketch", (1480, 560)))
     decode = graph.add(base.clean_node("VAEDecode", 224, "Decode sketch", (1770, 560)))
     graph.connect(model["id"], 0, guider["id"], "model", "MODEL")
     graph.connect(positive["id"], 0, guider["id"], "positive", "CONDITIONING")
@@ -126,7 +179,7 @@ def klein_sketch_subgraph():
     graph.connect(decode["id"], 0, -20, 0, "IMAGE")
     return graph_id, base.make_subgraph(
         graph_id,
-        "Cheap sketch - Flux.2 Klein 4B, 384px, four steps",
+        f"Cheap sketch - Flux.2 Klein 4B, {render_size}px, {steps} steps",
         [("actor_a", "IMAGE"), ("actor_b", "IMAGE"), ("actor_c", "IMAGE"), ("scene_prompt", "STRING"), ("seed", "INT")],
         [("sketch", "IMAGE")],
         graph,
@@ -327,6 +380,107 @@ def build_sketch_workflow():
     return workflow_document("actor-idea-sketch-batch", graph, [analyzer_def, sketch_def], 0.2, (260, 300))
 
 
+def build_ultrafast_sketch_workflow():
+    director_id, director_def = vision_director_subgraph()
+    sketch_id, sketch_def = klein_sketch_subgraph(256, 2, "ultrafast")
+    graph = base.Graph(object_links=False)
+    graph.add(base.clean_node("MarkdownNote", 3001, "How to use", (-1180, -360), [
+        "# ACTOR IDEA + SKETCH — ULTRAFAST\n\nOne 4B vision-language pass inventories all three actors and writes the complete scene batch. Flux.2 Klein then makes intentionally rough 256px, two-step thumbnails.\n\nReview `output/actor-pipeline/inbox` and move promising PNGs to `output/actor-pipeline/selected`. Keep the shared files in `output/actor-pipeline/actors`.\n\nJudge only the premise, actor placement, action, framing, and broad coherence. Faces, hands, anatomy, texture, and fine identity are not reliable at this draft level."
+    ], (700, 360)))
+    actor_a = graph.add(base.clean_node("LoadImage", 3002, "Actor A", (-1180, 80), ["imagen2_00062_.png", "image"]))
+    actor_b = graph.add(base.clean_node("LoadImage", 3003, "Actor B", (-1180, 390), ["imagen2_00062_.png", "image"]))
+    actor_c = graph.add(base.clean_node("LoadImage", 3004, "Actor C", (-1180, 700), ["imagen2_00062_.png", "image"]))
+    direction = graph.add(base.clean_node("TextBox1", 3005, "Scene boundaries", (-760, 80), [
+        "Invent varied, realistic adult photographic situations. Make each composition visually decisive and substantially different. Preserve the three actors as distinct recognizable people."
+    ], (560, 220)))
+    count = graph.add(base.clean_node("PrimitiveInt", 3006, "Number of thumbnail ideas", (-760, 350), [12, "fixed"]))
+    director_seed = graph.add(base.clean_node("SeedNode", 3007, "One seed for casting + ideas", (-760, 490), [135791357, "randomize"]))
+    sketch_seed = graph.add(base.clean_node("SeedNode", 3008, "Thumbnail seed base", (-760, 630), [975319753, "randomize"]))
+    director = graph.add(base.subgraph_node(
+        3009, director_id, "One-pass actor-aware director", (-100, 30),
+        [("actor_a", "IMAGE"), ("actor_b", "IMAGE"), ("actor_c", "IMAGE"),
+         ("direction", "STRING"), ("count", "INT"), ("seed", "INT")],
+        [("actor_inventory", "STRING"), ("snapshot", "STRING"), ("count", "INT"), ("summary", "STRING")],
+        (520, 230)
+    ))
+    loop = graph.add(base.clean_node("easy forLoopStart", 3010, "Thumbnail loop", (500, 40), [12]))
+    card = graph.add(story_node(
+        "ActorSceneCardAtIndex", 3011, "Current short scene card", (820, 50),
+        [("snapshot", "STRING", False), ("index", "INT", False)], [("scene_prompt", "STRING")], [], (390, 110)
+    ))
+    seed = graph.add(base.clean_node("easy mathInt", 3012, "Thumbnail seed = base + index", (820, 220), [0, 0, "add"]))
+    sketch = graph.add(base.subgraph_node(
+        3013, sketch_id, "Cheapest 256px / two-step Klein sketch", (1260, 20),
+        [("actor_a", "IMAGE"), ("actor_b", "IMAGE"), ("actor_c", "IMAGE"),
+         ("scene_prompt", "STRING"), ("seed", "INT")], [("sketch", "IMAGE")], (500, 240)
+    ))
+    settings_text = json.dumps({
+        "pipeline": "actor-idea-sketch-ultrafast",
+        "director": {
+            "model": "qwen3-vl-4b-heretic_int8",
+            "thinking": False,
+            "combined_actor_inventory_and_scene_batch": True,
+            "vision_sheet_max_dimension": 448,
+        },
+        "sketch": {
+            "model": "flux-2-klein-4b-fp8",
+            "width": 256,
+            "height": 256,
+            "steps": 2,
+            "cfg": 1.0,
+            "actor_reference_max_dimension": 256,
+        },
+    }, indent=2)
+    settings = graph.add(base.clean_node("TextBox1", 3014, "Portable ultrafast settings", (1270, 320), [settings_text], (480, 290)))
+    create = graph.add(story_node(
+        "CreateActorCandidateJob", 3015, "Create portable thumbnail candidate", (1810, 20),
+        [("actor_a", "IMAGE", False), ("actor_b", "IMAGE", False), ("actor_c", "IMAGE", False),
+         ("preview_image", "IMAGE", False), ("actor_inventory", "STRING", False), ("scene_prompt", "STRING", False),
+         ("director_seed", "INT", False), ("preview_seed", "INT", False), ("settings_json", "STRING", True)],
+        [("job", "ACTOR_CANDIDATE_JOB")], [settings_text], (490, 300)
+    ))
+    save = graph.add(story_node(
+        "SaveActorCandidateOutput", 3016, "Save ultrafast candidate", (2360, 40),
+        [("finalize_mode", "BOOLEAN", True), ("job", "ACTOR_CANDIDATE_JOB", False), ("image", "IMAGE", False),
+         ("render_seed", "INT", False), ("candidate_root", "STRING", True)],
+        [("image", "IMAGE"), ("saved_path", "STRING")], [False, PIPELINE_ROOT], (440, 220)
+    ))
+    path = graph.add(base.clean_node("PreviewAny", 3017, "Last saved path", (2870, 20), []))
+    loop_end = graph.add(base.clean_node("easy forLoopEnd", 3018, "Finish thumbnail batch", (2870, 190), []))
+    preview = graph.add(base.clean_node("PreviewImage", 3019, "Last thumbnail", (3210, 150), []))
+
+    for actor, slot in zip((actor_a, actor_b, actor_c), range(3)):
+        graph.connect(actor["id"], 0, director["id"], slot, "IMAGE")
+        graph.connect(actor["id"], 0, sketch["id"], slot, "IMAGE")
+        graph.connect(actor["id"], 0, create["id"], slot, "IMAGE")
+    graph.connect(direction["id"], 0, director["id"], "direction", "STRING")
+    graph.connect(count["id"], 0, director["id"], "count", "INT")
+    graph.connect(director_seed["id"], 0, director["id"], "seed", "INT")
+    graph.connect(director["id"], 2, loop["id"], 1, "INT")
+    graph.connect(director["id"], 1, card["id"], "snapshot", "STRING")
+    graph.connect(loop["id"], 1, card["id"], "index", "INT")
+    graph.connect(sketch_seed["id"], 0, seed["id"], 0, "INT")
+    graph.connect(loop["id"], 1, seed["id"], 1, "INT")
+    graph.connect(card["id"], 0, sketch["id"], "scene_prompt", "STRING")
+    graph.connect(seed["id"], 0, sketch["id"], "seed", "INT")
+    graph.connect(sketch["id"], 0, create["id"], "preview_image", "IMAGE")
+    graph.connect(director["id"], 0, create["id"], "actor_inventory", "STRING")
+    graph.connect(card["id"], 0, create["id"], "scene_prompt", "STRING")
+    graph.connect(director_seed["id"], 0, create["id"], "director_seed", "INT")
+    graph.connect(seed["id"], 0, create["id"], "preview_seed", "INT")
+    graph.connect(settings["id"], 0, create["id"], "settings_json", "STRING")
+    graph.connect(create["id"], 0, save["id"], "job", "ACTOR_CANDIDATE_JOB")
+    graph.connect(sketch["id"], 0, save["id"], "image", "IMAGE")
+    graph.connect(seed["id"], 0, save["id"], "render_seed", "INT")
+    graph.connect(save["id"], 1, path["id"], 0, "*")
+    graph.connect(loop["id"], 0, loop_end["id"], 0, "FLOW_CONTROL")
+    graph.connect(save["id"], 0, loop_end["id"], 1, "IMAGE")
+    graph.connect(loop_end["id"], 0, preview["id"], 0, "IMAGE")
+    return workflow_document(
+        "actor-idea-sketch-ultrafast", graph, [director_def, sketch_def], 0.22, (280, 300)
+    )
+
+
 def build_finalizer(strategy, refine_prompt, use_preview, denoise=None):
     renderer_options = {}
     if strategy == "direct-uplift":
@@ -445,6 +599,7 @@ def build_finalizer(strategy, refine_prompt, use_preview, denoise=None):
 def main():
     workflows = {
         "actor-idea-sketch-batch.json": build_sketch_workflow(),
+        "actor-idea-sketch-ultrafast.json": build_ultrafast_sketch_workflow(),
         "actor-finalize-direct-uplift.json": build_finalizer("direct-uplift", False, True, 0.65),
         "actor-finalize-fresh-render.json": build_finalizer("fresh-render", True, False),
         "actor-finalize-hybrid.json": build_finalizer("hybrid", True, True, 0.85),

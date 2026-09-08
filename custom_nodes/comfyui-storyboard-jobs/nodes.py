@@ -680,6 +680,74 @@ Invent exactly {int(count)} distinct, photographable scene ideas. Keep each idea
         return (prompt,)
 
 
+class BuildActorVisionSceneBatchPrompt:
+    """Build one compact request that inventories the casting sheet and directs scenes."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "direction": ("STRING", {"forceInput": True}),
+                "count": ("INT", {"forceInput": True, "min": 1, "max": 100}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt",)
+    FUNCTION = "build"
+    CATEGORY = "Actor Candidate Jobs"
+
+    def build(self, direction, count):
+        prompt = f"""The attached image is a three-panel casting sheet: ACTOR A is left, ACTOR B is middle, and ACTOR C is right. All depicted people are adults.
+
+DIRECTION:
+{direction}
+
+First return exactly one line beginning CAST:. On that line, give each actor's stable visible identity traits in very few words: apparent adult age range, face, hair, skin tone, and build. Ignore the source pose, clothing, expression, and background.
+Then invent exactly {int(count)} distinct photographable scenes using these actors. Return one complete scene per line beginning SCENE 1:, SCENE 2:, and so on. Each scene must briefly identify ACTOR A, ACTOR B, and ACTOR C; give their positions and one clear visible action; then state the setting, camera framing, and lighting. Use simple concrete language. Avoid tangled bodies, unclear limb ownership, impossible joints, mirrors, crowds, fantasy, science fiction, alternatives, analysis, blank lines, and continuation lines."""
+        return (prompt,)
+
+
+class ParseActorVisionSceneBatch:
+    """Split a combined casting/director reply into inventory and scene cards."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "raw_text": ("STRING", {"forceInput": True}),
+                "requested_count": ("INT", {"forceInput": True, "min": 1, "max": 100}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING")
+    RETURN_NAMES = ("actor_inventory", "snapshot", "count", "summary")
+    FUNCTION = "parse"
+    CATEGORY = "Actor Candidate Jobs"
+
+    def parse(self, raw_text, requested_count):
+        text = re.sub(r"<think>.*?</think>", "", str(raw_text), flags=re.IGNORECASE | re.DOTALL)
+        cast_match = re.search(r"(?im)^\s*(?:CAST|CASTING)\s*:\s*(.+?)\s*$", text)
+        inventory = cast_match.group(1).strip() if cast_match else (
+            "ACTOR A, ACTOR B, and ACTOR C are the three adults stored in the portable actor reference files."
+        )
+        cards = [
+            match.group(1).strip().strip('"')
+            for match in re.finditer(r"(?im)^\s*SCENE\s*\d+\s*[:.)-]\s*(.+?)\s*$", text)
+            if match.group(1).strip()
+        ]
+        count = min(int(requested_count), len(cards))
+        cards = cards[:count]
+        if not cards:
+            raise ValueError("The combined vision/director reply did not contain any SCENE lines")
+        return (
+            inventory,
+            json.dumps(cards, ensure_ascii=False),
+            len(cards),
+            f"one casting inventory and {len(cards)} scene card(s) parsed",
+        )
+
+
 class BuildActorFinalPromptRequest:
     @classmethod
     def INPUT_TYPES(cls):
@@ -770,6 +838,8 @@ NODE_CLASS_MAPPINGS = {
     "SaveActorCandidateOutput": SaveActorCandidateOutput,
     "ParseActorSceneCards": ParseActorSceneCards,
     "BuildActorSceneBatchPrompt": BuildActorSceneBatchPrompt,
+    "BuildActorVisionSceneBatchPrompt": BuildActorVisionSceneBatchPrompt,
+    "ParseActorVisionSceneBatch": ParseActorVisionSceneBatch,
     "BuildActorFinalPromptRequest": BuildActorFinalPromptRequest,
     "ActorSceneCardAtIndex": ActorSceneCardAtIndex,
     "SetActorCandidateFinalPrompt": SetActorCandidateFinalPrompt,
@@ -788,6 +858,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveActorCandidateOutput": "Save Candidate / Final Render",
     "ParseActorSceneCards": "Parse Batched Actor Scene Cards",
     "BuildActorSceneBatchPrompt": "Build Batched Actor Scene Prompt",
+    "BuildActorVisionSceneBatchPrompt": "Build Vision Scene Batch Prompt",
+    "ParseActorVisionSceneBatch": "Parse Vision Scene Batch",
     "BuildActorFinalPromptRequest": "Build Final Actor Prompt Request",
     "ActorSceneCardAtIndex": "Scene Card at Index",
     "SetActorCandidateFinalPrompt": "Record Final Actor Prompt",

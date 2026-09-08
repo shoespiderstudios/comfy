@@ -11,6 +11,7 @@ Locally developed nodes required by these workflows live in [`custom_nodes/`](cu
 ## Actor idea pipeline
 
 - `actor-idea-sketch-batch.json` analyzes three actors once, generates a batch of concise scene cards in one 4B language-model pass, and renders 384px four-step Flux.2 Klein sketches.
+- `actor-idea-sketch-ultrafast.json` combines actor inspection and batched scene direction into one 4B vision pass, then renders intentionally rough 256px two-step Flux.2 Klein thumbnails.
 - `actor-finalize-direct-uplift.json` reconstructs a selected sketch at 832px with its original short scene card, an 18-step schedule, and 0.65 denoise.
 - `actor-finalize-fresh-render.json` refines the selected direction and renders from fresh 1024px noise.
 - `actor-finalize-hybrid.json` refines the selected direction and reconstructs the sketch at 0.85 denoise.

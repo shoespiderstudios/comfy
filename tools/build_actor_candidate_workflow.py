@@ -6,10 +6,15 @@ from pathlib import Path
 
 COMFY = Path(r"C:\Users\mrtom\AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI")
 WF_DIR = COMFY / "user" / "default" / "workflows"
+REPO_WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
+SOURCE_NAMES = [
+    "imagen2-storyboard-or-full-render-loop.json",
+    "imagen2-storyboard-and-full-render-paired-loop.json",
+    "imagen2-actor-candidate-quality-gate.json",
+]
 SOURCES = [
-    WF_DIR / "imagen2-storyboard-or-full-render-loop.json",
-    WF_DIR / "imagen2-storyboard-and-full-render-paired-loop.json",
-    WF_DIR / "imagen2-actor-candidate-quality-gate.json",
+    live_path if (live_path := WF_DIR / name).is_file() else REPO_WORKFLOWS / name
+    for name in SOURCE_NAMES
 ]
 DESTINATION = WF_DIR / "imagen2-actor-candidate-quality-gate.json"
 

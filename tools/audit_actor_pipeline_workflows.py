@@ -5,6 +5,7 @@ from pathlib import Path
 WF_DIR = Path(r"C:\Users\mrtom\AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\user\default\workflows")
 NAMES = (
     "actor-idea-sketch-batch.json",
+    "actor-idea-sketch-ultrafast.json",
     "actor-finalize-direct-uplift.json",
     "actor-finalize-fresh-render.json",
     "actor-finalize-hybrid.json",
