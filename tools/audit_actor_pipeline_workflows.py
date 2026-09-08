@@ -9,6 +9,7 @@ NAMES = (
     "actor-finalize-direct-uplift.json",
     "actor-finalize-fresh-render.json",
     "actor-finalize-hybrid.json",
+    "actor-progression-escalation-loop.json",
 )
 
 

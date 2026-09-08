@@ -14,6 +14,7 @@ import folder_paths
 
 METADATA_KEY = "storyboard_job"
 CANDIDATE_METADATA_KEY = "actor_candidate_job"
+PROGRESSION_METADATA_KEY = "actor_progression"
 
 
 def _safe_root(value):
@@ -865,6 +866,234 @@ class SetActorCandidateFinalPrompt:
         return (updated,)
 
 
+class BuildProgressionPlanPrompt:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "direction": ("STRING", {"forceInput": True}),
+                "count": ("INT", {"forceInput": True, "min": 2, "max": 20}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt",)
+    FUNCTION = "build"
+    CATEGORY = "Progression Jobs"
+
+    def build(self, direction, count):
+        prompt = f"""Study the attached source image. All depicted people are adults. Preserve every continuing person's recognizable identity, apparent age, body type, and distinguishing visible traits.
+
+PROGRESSION DIRECTION:
+{direction}
+
+Plan one coherent visual progression of exactly {int(count)} stages. First output one short line beginning SCENARIO: that establishes the setting and premise. Then output exactly one line per stage beginning STAGE 1:, STAGE 2:, and so on.
+
+Each stage must describe the complete visible state of that frame in no more than 28 words. Introduce exactly one meaningful visible change from the preceding stage while retaining all still-relevant people, objects, positions, wardrobe, environment, time, and consequences. Stage 1 should be a modest development from the source; the final stage should be the logical culmination. Use only concrete, photographable details. Keep limb ownership and spatial relationships unambiguous. Do not write analysis, alternatives, headings, blank lines, or continuation lines."""
+        return (prompt,)
+
+
+class ParseProgressionPlan:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "raw_text": ("STRING", {"forceInput": True}),
+                "requested_count": ("INT", {"forceInput": True, "min": 2, "max": 20}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "INT", "STRING")
+    RETURN_NAMES = ("scenario", "snapshot", "count", "summary")
+    FUNCTION = "parse"
+    CATEGORY = "Progression Jobs"
+
+    def parse(self, raw_text, requested_count):
+        text = re.sub(r"<think>.*?</think>", "", str(raw_text), flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r"<\|[^>]+\|>", "", text).strip()
+        scenario_match = re.search(r"(?im)^\s*SCENARIO\s*:\s*(.+?)\s*$", text)
+        scenario = scenario_match.group(1).strip() if scenario_match else "A continuous visual progression from the source image."
+
+        def extract(marker_pattern):
+            markers = list(re.finditer(marker_pattern, text, flags=re.IGNORECASE | re.MULTILINE))
+            result = []
+            for index, marker in enumerate(markers):
+                end = markers[index + 1].start() if index + 1 < len(markers) else len(text)
+                value = text[marker.end():end].strip().strip('"')
+                if value:
+                    result.append(value)
+            return result
+
+        stages = extract(r"(?<!\w)STAGE\s*\d+\s*[:.)-]\s*")
+        mode = "stage labels"
+        if not stages:
+            stages = extract(r"(?m)^\s*\d+\s*[:.)-]\s+")
+            mode = "numbered lines"
+
+        def plausible(stage):
+            words = re.findall(r"[A-Za-z]+", stage.lower())
+            content = [word for word in words if word not in {"stage"}]
+            return len(content) >= 6 and len(set(content)) / len(content) >= 0.4
+
+        stages = [stage for stage in stages if plausible(stage)]
+        stages = stages[:int(requested_count)]
+        if not stages:
+            excerpt = re.sub(r"\s+", " ", text)[:500]
+            raise ValueError(
+                "The progression director produced no usable stages. "
+                f"Raw reply excerpt: {excerpt or '<empty>'}"
+            )
+        return (
+            scenario,
+            json.dumps(stages, ensure_ascii=False),
+            len(stages),
+            f"{len(stages)} progression stage(s) parsed via {mode}",
+        )
+
+
+class ProgressionStageAtIndex:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "scenario": ("STRING", {"forceInput": True}),
+                "snapshot": ("STRING", {"forceInput": True}),
+                "index": ("INT", {"forceInput": True}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("stage_prompt", "render_prompt")
+    FUNCTION = "get"
+    CATEGORY = "Progression Jobs"
+
+    def get(self, scenario, snapshot, index):
+        stages = json.loads(snapshot)
+        if index < 0 or index >= len(stages):
+            raise IndexError(f"Progression index {index} is outside a plan of {len(stages)} stages")
+        stage = str(stages[index])
+        render_prompt = (
+            f"SCENARIO: {scenario}\n"
+            f"CURRENT VISIBLE STATE — STAGE {index + 1} OF {len(stages)}: {stage}\n"
+            "Continue naturally from the previous frame. Preserve the source subjects' identities and every "
+            "still-relevant established detail. Show only the current visible state, not a collage or multiple moments."
+        )
+        return (stage, render_prompt)
+
+
+class ProgressionRunId:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_image": ("IMAGE",),
+                "snapshot": ("STRING", {"forceInput": True}),
+                "director_seed": ("INT", {"forceInput": True}),
+                "render_seed_base": ("INT", {"forceInput": True}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("run_id",)
+    FUNCTION = "create"
+    CATEGORY = "Progression Jobs"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("NaN")
+
+    def create(self, source_image, snapshot, director_seed, render_seed_base):
+        digest = hashlib.sha256()
+        digest.update(source_image[0].detach().cpu().numpy().tobytes())
+        digest.update(str(snapshot).encode("utf-8"))
+        digest.update(str(director_seed).encode("ascii"))
+        digest.update(str(render_seed_base).encode("ascii"))
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        return (f"progression_{stamp}_{digest.hexdigest()[:10]}",)
+
+
+class SaveProgressionFrame:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "source_image": ("IMAGE",),
+                "run_id": ("STRING", {"forceInput": True}),
+                "stage_index": ("INT", {"forceInput": True}),
+                "stage_count": ("INT", {"forceInput": True}),
+                "scenario": ("STRING", {"forceInput": True}),
+                "plan_snapshot": ("STRING", {"forceInput": True}),
+                "stage_prompt": ("STRING", {"forceInput": True}),
+                "render_prompt": ("STRING", {"forceInput": True}),
+                "director_seed": ("INT", {"forceInput": True}),
+                "render_seed": ("INT", {"forceInput": True}),
+                "settings_json": ("STRING", {"forceInput": True}),
+                "progression_root": ("STRING", {"default": "actor-progression"}),
+            },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("image", "saved_path")
+    OUTPUT_NODE = True
+    FUNCTION = "save"
+    CATEGORY = "Progression Jobs"
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("NaN")
+
+    def save(self, image, source_image, run_id, stage_index, stage_count, scenario,
+             plan_snapshot, stage_prompt, render_prompt, director_seed, render_seed,
+             settings_json, progression_root, prompt=None, extra_pnginfo=None):
+        if not re.fullmatch(r"progression_[A-Za-z0-9_-]+", str(run_id)):
+            raise ValueError("Invalid progression run ID")
+        root = _safe_root(progression_root)
+        run_dir = root / str(run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        source_path = run_dir / "source.png"
+        if not source_path.exists():
+            _tensor_to_pil(source_image).save(source_path, compress_level=4)
+        try:
+            settings = json.loads(settings_json or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"settings_json is not valid JSON: {exc}") from exc
+        try:
+            plan = json.loads(plan_snapshot)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"plan_snapshot is not valid JSON: {exc}") from exc
+        number = int(stage_index) + 1
+        payload = {
+            "version": 1,
+            "run_id": str(run_id),
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "stage": number,
+            "stage_count": int(stage_count),
+            "scenario": str(scenario),
+            "plan": plan,
+            "stage_prompt": str(stage_prompt),
+            "render_prompt": str(render_prompt),
+            "director_seed": int(director_seed),
+            "render_seed": int(render_seed),
+            "settings": settings,
+            "source_path": str(source_path),
+        }
+        info = PngInfo()
+        info.add_text(PROGRESSION_METADATA_KEY, json.dumps(payload, ensure_ascii=False))
+        info.add_text("scenario", payload["scenario"])
+        info.add_text("stage_prompt", payload["stage_prompt"])
+        info.add_text("render_prompt", payload["render_prompt"])
+        if prompt is not None:
+            info.add_text("prompt", json.dumps(prompt, ensure_ascii=False))
+        if extra_pnginfo:
+            for key, value in extra_pnginfo.items():
+                info.add_text(str(key), json.dumps(value, ensure_ascii=False))
+        destination = run_dir / f"stage_{number:03d}_of_{int(stage_count):03d}.png"
+        _tensor_to_pil(image).save(destination, pnginfo=info, compress_level=4)
+        return (image, str(destination))
+
+
 NODE_CLASS_MAPPINGS = {
     "CreateStoryboardJob": CreateStoryboardJob,
     "StoryboardDirectorySnapshot": StoryboardDirectorySnapshot,
@@ -883,6 +1112,11 @@ NODE_CLASS_MAPPINGS = {
     "BuildActorFinalPromptRequest": BuildActorFinalPromptRequest,
     "ActorSceneCardAtIndex": ActorSceneCardAtIndex,
     "SetActorCandidateFinalPrompt": SetActorCandidateFinalPrompt,
+    "BuildProgressionPlanPrompt": BuildProgressionPlanPrompt,
+    "ParseProgressionPlan": ParseProgressionPlan,
+    "ProgressionStageAtIndex": ProgressionStageAtIndex,
+    "ProgressionRunId": ProgressionRunId,
+    "SaveProgressionFrame": SaveProgressionFrame,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -903,4 +1137,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BuildActorFinalPromptRequest": "Build Final Actor Prompt Request",
     "ActorSceneCardAtIndex": "Scene Card at Index",
     "SetActorCandidateFinalPrompt": "Record Final Actor Prompt",
+    "BuildProgressionPlanPrompt": "Build Progression Plan Prompt",
+    "ParseProgressionPlan": "Parse Progression Plan",
+    "ProgressionStageAtIndex": "Progression Stage at Index",
+    "ProgressionRunId": "Create Progression Run ID",
+    "SaveProgressionFrame": "Save Progression Frame",
 }

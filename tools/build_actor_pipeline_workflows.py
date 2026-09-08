@@ -626,6 +626,254 @@ def build_finalizer(strategy, refine_prompt, use_preview, denoise=None):
     return workflow_document(f"actor-finalize-{strategy}", graph, subgraphs, 0.22, (250, 280))
 
 
+def progression_director_subgraph():
+    graph_id = stable_id("actor-progression-director")
+    graph = base.Graph(object_links=True)
+    scale = graph.add(base.clean_node("ImageScaleToMaxDimension", 601, "Compact vision input", (-420, 20), ["lanczos", 448]))
+    clip = graph.add(base.clean_node("CLIPLoader", 602, "Qwen3-VL 4B Heretic", (-420, 330), ["qwen3-vl-4b-heretic_int8.safetensors", "krea2", "default"]))
+    build = graph.add(story_node(
+        "BuildProgressionPlanPrompt", 603, "Build one complete progression request", (0, 20),
+        [("direction", "STRING", False), ("count", "INT", False)], [("prompt", "STRING")], [], (470, 130)
+    ))
+    generate = graph.add(base.clean_node(
+        "TextGenerate", 604, "Plan the complete progression once", (530, 30),
+        ["", 360, "on", 0.7, 40, 0.9, 0.02, 1.08, 1, 0.2, False, True], (480, 350)
+    ))
+    parse = graph.add(story_node(
+        "ParseProgressionPlan", 605, "Parse scenario and stages", (1070, 80),
+        [("raw_text", "STRING", False), ("requested_count", "INT", False)],
+        [("scenario", "STRING"), ("snapshot", "STRING"), ("count", "INT"), ("summary", "STRING")],
+        [], (430, 150)
+    ))
+    graph.connect(-10, 0, scale["id"], "image", "IMAGE")
+    graph.connect(-10, 1, build["id"], "direction", "STRING")
+    graph.connect(-10, 2, build["id"], "count", "INT")
+    graph.connect(clip["id"], 0, generate["id"], "clip", "CLIP")
+    graph.connect(scale["id"], 0, generate["id"], "image", "IMAGE")
+    graph.connect(build["id"], 0, generate["id"], "prompt", "STRING")
+    graph.connect(-10, 3, generate["id"], "sampling_mode.seed", "INT")
+    graph.connect(generate["id"], 0, parse["id"], "raw_text", "STRING")
+    graph.connect(-10, 2, parse["id"], "requested_count", "INT")
+    for slot, kind in enumerate(("STRING", "STRING", "INT", "STRING")):
+        graph.connect(parse["id"], slot, -20, slot, kind)
+    graph.connect(generate["id"], 0, -20, 4, "STRING")
+    return graph_id, base.make_subgraph(
+        graph_id,
+        "One-pass source-aware progression director",
+        [("source_image", "IMAGE"), ("direction", "STRING"), ("count", "INT"), ("seed", "INT")],
+        [("scenario", "STRING"), ("snapshot", "STRING"), ("count", "INT"),
+         ("summary", "STRING"), ("raw_reply", "STRING")],
+        graph,
+        1750,
+    )
+
+
+def progression_sketch_renderer_subgraph():
+    graph_id = stable_id("actor-progression-hybrid-sketch-renderer")
+    graph = base.Graph(object_links=True)
+
+    def image_scale(node_id, title, pos):
+        return base.custom_node(
+            "ImageScale", node_id, title, pos,
+            [("image", "IMAGE", False), ("upscale_method", "COMBO", True),
+             ("width", "INT", True), ("height", "INT", True), ("crop", "COMBO", True)],
+            [("IMAGE", "IMAGE")], ["lanczos", 320, 320, "center"], (330, 190)
+        )
+
+    model = graph.add(base.clean_node("UNETLoader", 701, "Flux.2 Klein 4B FP8", (-520, 570), ["flux-2-klein-4b-fp8.safetensors", "default"]))
+    lora = graph.add(base.custom_node(
+        "LoraLoaderModelOnly", 702, "Pencil sketch-generator LoRA", (-150, 570),
+        [("model", "MODEL", False), ("lora_name", "COMBO", True), ("strength_model", "FLOAT", True)],
+        [("MODEL", "MODEL")], ["sketch_generator_klein_4b.safetensors", 1.0], (330, 110)
+    ))
+    clip = graph.add(base.clean_node("CLIPLoader", 703, "Qwen 3 4B Flux encoder", (-520, 720), ["qwen_3_4b.safetensors", "flux2", "default"]))
+    vae = graph.add(base.clean_node("VAELoader", 704, "Flux.2 VAE", (-520, 870), ["flux2-vae.safetensors"]))
+    style = graph.add(base.clean_node(
+        "StringConcatenate", 705, "Apply pencil-storyboard treatment", (-80, 350),
+        ["rough monochrome pencil storyboard, loose construction lines, simple tonal shading, readable silhouettes", "", ", "]
+    ))
+    encode = graph.add(base.clean_node("CLIPTextEncode", 706, "Encode current visible state", (340, 440), [""]))
+    zero = graph.add(base.clean_node("ConditioningZeroOut", 707, "Zero negative", (670, 620)))
+    source_scale = graph.add(image_scale(708, "Original identity anchor — square crop", (-450, -170)))
+    previous_scale = graph.add(image_scale(709, "Previous frame — square starting image", (-70, -170)))
+    source_latent = graph.add(base.clean_node("VAEEncode", 710, "Encode original anchor", (-450, 70)))
+    previous_latent = graph.add(base.clean_node("VAEEncode", 711, "Encode previous frame", (-70, 70)))
+    positive_ref = graph.add(base.clean_node("ReferenceLatent", 712, "Original anchor — positive", (300, 70)))
+    negative_ref = graph.add(base.clean_node("ReferenceLatent", 713, "Original anchor — negative", (300, 200)))
+    scheduler = graph.add(base.clean_node("Flux2Scheduler", 714, "Three-step draft schedule", (820, 690), [3, 320, 320]))
+    noise = graph.add(base.clean_node("RandomNoise", 715, "Stage noise", (820, 830), [0, "fixed"]))
+    sampler = graph.add(base.clean_node("KSamplerSelect", 716, "Euler", (820, 950), ["euler"]))
+    guider = graph.add(base.clean_node("CFGGuider", 717, "Klein guidance", (1080, 480), [1.0]))
+    split = graph.add(story_node(
+        "SplitSigmasDenoise", 718, "Previous-frame denoise", (1090, 710),
+        [("sigmas", "SIGMAS", False), ("denoise", "FLOAT", True)],
+        [("high_sigmas", "SIGMAS"), ("low_sigmas", "SIGMAS")], [0.65], (330, 110)
+    ))
+    sample = graph.add(base.clean_node("SamplerCustomAdvanced", 719, "Render next progression stage", (1450, 550)))
+    decode = graph.add(base.clean_node("VAEDecode", 720, "Decode stage", (1740, 550)))
+
+    graph.connect(model["id"], 0, lora["id"], "model", "MODEL")
+    graph.connect(-10, 6, lora["id"], "strength_model", "FLOAT")
+    graph.connect(-10, 2, style["id"], "string_b", "STRING")
+    graph.connect(style["id"], 0, encode["id"], "text", "STRING")
+    graph.connect(clip["id"], 0, encode["id"], "clip", "CLIP")
+    graph.connect(encode["id"], 0, zero["id"], "conditioning", "CONDITIONING")
+    graph.connect(-10, 0, source_scale["id"], "image", "IMAGE")
+    graph.connect(-10, 1, previous_scale["id"], "image", "IMAGE")
+    for target in (source_scale, previous_scale):
+        graph.connect(-10, 5, target["id"], "width", "INT")
+        graph.connect(-10, 5, target["id"], "height", "INT")
+    graph.connect(source_scale["id"], 0, source_latent["id"], "pixels", "IMAGE")
+    graph.connect(previous_scale["id"], 0, previous_latent["id"], "pixels", "IMAGE")
+    graph.connect(vae["id"], 0, source_latent["id"], "vae", "VAE")
+    graph.connect(vae["id"], 0, previous_latent["id"], "vae", "VAE")
+    graph.connect(encode["id"], 0, positive_ref["id"], "conditioning", "CONDITIONING")
+    graph.connect(zero["id"], 0, negative_ref["id"], "conditioning", "CONDITIONING")
+    graph.connect(source_latent["id"], 0, positive_ref["id"], "latent", "LATENT")
+    graph.connect(source_latent["id"], 0, negative_ref["id"], "latent", "LATENT")
+    graph.connect(lora["id"], 0, guider["id"], "model", "MODEL")
+    graph.connect(positive_ref["id"], 0, guider["id"], "positive", "CONDITIONING")
+    graph.connect(negative_ref["id"], 0, guider["id"], "negative", "CONDITIONING")
+    graph.connect(-10, 5, scheduler["id"], "width", "INT")
+    graph.connect(-10, 5, scheduler["id"], "height", "INT")
+    graph.connect(scheduler["id"], 0, split["id"], "sigmas", "SIGMAS")
+    graph.connect(-10, 4, split["id"], "denoise", "FLOAT")
+    graph.connect(-10, 3, noise["id"], "noise_seed", "INT")
+    graph.connect(noise["id"], 0, sample["id"], "noise", "NOISE")
+    graph.connect(guider["id"], 0, sample["id"], "guider", "GUIDER")
+    graph.connect(sampler["id"], 0, sample["id"], "sampler", "SAMPLER")
+    graph.connect(split["id"], 1, sample["id"], "sigmas", "SIGMAS")
+    graph.connect(previous_latent["id"], 0, sample["id"], "latent_image", "LATENT")
+    graph.connect(sample["id"], 0, decode["id"], "samples", "LATENT")
+    graph.connect(vae["id"], 0, decode["id"], "vae", "VAE")
+    graph.connect(decode["id"], 0, -20, 0, "IMAGE")
+    return graph_id, base.make_subgraph(
+        graph_id,
+        "Hybrid progression sketch — original anchor plus previous frame",
+        [("source_image", "IMAGE"), ("previous_frame", "IMAGE"), ("render_prompt", "STRING"),
+         ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("lora_strength", "FLOAT")],
+        [("image", "IMAGE")],
+        graph,
+        2050,
+    )
+
+
+def build_progression_workflow():
+    director_id, director_def = progression_director_subgraph()
+    renderer_id, renderer_def = progression_sketch_renderer_subgraph()
+    graph = base.Graph(object_links=False)
+    graph.add(base.clean_node("MarkdownNote", 4001, "How this workflow works", (-1320, -470), [
+        "# ACTOR PROGRESSION / ESCALATION LOOP\n\nThe local vision director studies the source once and plans a complete sequence. Each render starts from the preceding frame, while the original image remains a permanent reference anchor. This gives visible continuity without allowing identity drift to compound unchecked.\n\nThe output is deliberately rough pencil storyboard art for fast review, not final anatomy or finish."
+    ], (700, 360)))
+    graph.add(base.clean_node("MarkdownNote", 4002, "Configuration guide", (-580, -470), [
+        "## CONFIGURATION\n\n**Progression direction** — describe the kind of arc and any boundaries. The director invents the individual stages.\n\n**Number of stages** — 6–10 is a useful range. More stages require a longer language response and increase drift.\n\n**Previous-frame denoise** — lower values preserve the prior frame; higher values permit larger changes. Try 0.45 for conservative continuity, 0.65 for balanced progression, or 0.80 for dramatic changes.\n\n**Draft size** — 256 is fastest; 320 is the default; 384 is easier to judge.\n\n**Sketch LoRA strength** — 1.0 is the intended effect. Lower it if the drawing becomes too abstract.\n\nRandomize either seed to create a new plan or visual interpretation."
+    ], (730, 500)))
+    graph.add(base.clean_node("MarkdownNote", 4003, "Outputs and metadata", (190, -470), [
+        "## OUTPUTS\n\nEach run is saved beneath `output/actor-progression/<run-id>/`. The folder contains `source.png` and numbered stage images.\n\nEvery stage PNG embeds the complete scenario, full stage plan, current stage, actual render prompt, seeds, model settings, denoise, dimensions, and source path. This makes any promising stage reproducible and suitable for a later full-render workflow."
+    ], (680, 360)))
+    source = graph.add(base.clean_node("LoadImage", 4004, "SOURCE IMAGE", (-1320, 30), ["imagen2_00062_.png", "image"]))
+    direction = graph.add(base.clean_node("TextBox1", 4005, "Progression direction", (-940, 30), [
+        "Create a coherent escalating sequence with increasingly consequential visible action. Keep the same subjects and environment unless a change is explicitly established."
+    ], (570, 230)))
+    count = graph.add(base.clean_node("PrimitiveInt", 4006, "Number of stages", (-940, 300), [8, "fixed"]))
+    director_seed = graph.add(base.clean_node("SeedNode", 4007, "Director seed", (-940, 450), [314159265, "randomize"]))
+    render_seed = graph.add(base.clean_node("SeedNode", 4008, "Render seed base", (-940, 590), [271828182, "randomize"]))
+    denoise = graph.add(base.clean_node("PrimitiveFloat", 4009, "Previous-frame denoise", (-600, 330), [0.65]))
+    size = graph.add(base.clean_node("PrimitiveInt", 4010, "Square draft size", (-600, 470), [320, "fixed"]))
+    strength = graph.add(base.clean_node("PrimitiveFloat", 4011, "Sketch LoRA strength", (-600, 610), [1.0]))
+    director = graph.add(base.subgraph_node(
+        4012, director_id, "Plan complete progression once", (-260, 20),
+        [("source_image", "IMAGE"), ("direction", "STRING"), ("count", "INT"), ("seed", "INT")],
+        [("scenario", "STRING"), ("snapshot", "STRING"), ("count", "INT"),
+         ("summary", "STRING"), ("raw_reply", "STRING")], (500, 230)
+    ))
+    raw = graph.add(base.clean_node("PreviewAny", 4013, "Raw progression director reply", (-250, 300), []))
+    summary = graph.add(base.clean_node("PreviewAny", 4014, "Parsed plan summary", (280, 300), []))
+    run_id = graph.add(story_node(
+        "ProgressionRunId", 4015, "Create unique run folder", (300, 20),
+        [("source_image", "IMAGE", False), ("snapshot", "STRING", False),
+         ("director_seed", "INT", False), ("render_seed_base", "INT", False)],
+        [("run_id", "STRING")], [], (390, 150)
+    ))
+    loop = graph.add(base.clean_node("easy forLoopStart", 4016, "Progression loop", (750, 20), [8]))
+    stage = graph.add(story_node(
+        "ProgressionStageAtIndex", 4017, "Current logical stage", (1060, 20),
+        [("scenario", "STRING", False), ("snapshot", "STRING", False), ("index", "INT", False)],
+        [("stage_prompt", "STRING"), ("render_prompt", "STRING")], [], (430, 150)
+    ))
+    stage_seed = graph.add(base.clean_node("easy mathInt", 4018, "Stage seed = base + index", (1060, 220), [0, 0, "add"]))
+    renderer = graph.add(base.subgraph_node(
+        4019, renderer_id, "Hybrid pencil-sketch stage renderer", (1550, 20),
+        [("source_image", "IMAGE"), ("previous_frame", "IMAGE"), ("render_prompt", "STRING"),
+         ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("lora_strength", "FLOAT")],
+        [("image", "IMAGE")], (520, 270)
+    ))
+    settings_text = json.dumps({
+        "pipeline": "actor-progression-escalation-loop",
+        "director": {"model": "qwen3-vl-4b-heretic_int8", "max_tokens": 360, "thinking": False},
+        "renderer": {"model": "flux-2-klein-4b-fp8", "text_encoder": "qwen_3_4b",
+                     "lora": "sketch_generator_klein_4b", "steps": 3, "sampler": "euler"},
+    }, indent=2)
+    settings = graph.add(base.clean_node("TextBox1", 4020, "Recorded pipeline settings", (1550, 340), [settings_text], (500, 300)))
+    save = graph.add(story_node(
+        "SaveProgressionFrame", 4021, "Save stage with complete context", (2130, 20),
+        [("image", "IMAGE", False), ("source_image", "IMAGE", False), ("run_id", "STRING", False),
+         ("stage_index", "INT", False), ("stage_count", "INT", False), ("scenario", "STRING", False),
+         ("plan_snapshot", "STRING", False), ("stage_prompt", "STRING", False),
+         ("render_prompt", "STRING", False), ("director_seed", "INT", False),
+         ("render_seed", "INT", False), ("settings_json", "STRING", False),
+         ("progression_root", "STRING", True)],
+        [("image", "IMAGE"), ("saved_path", "STRING")], ["actor-progression"], (500, 370)
+    ))
+    path = graph.add(base.clean_node("PreviewAny", 4022, "Last saved stage path", (2700, 20), []))
+    loop_end = graph.add(base.clean_node("easy forLoopEnd", 4023, "Carry stage into next iteration", (2700, 230), []))
+    preview = graph.add(base.clean_node("PreviewImage", 4024, "Last progression frame", (3050, 190), []))
+
+    graph.connect(source["id"], 0, director["id"], "source_image", "IMAGE")
+    graph.connect(direction["id"], 0, director["id"], "direction", "STRING")
+    graph.connect(count["id"], 0, director["id"], "count", "INT")
+    graph.connect(director_seed["id"], 0, director["id"], "seed", "INT")
+    graph.connect(director["id"], 4, raw["id"], 0, "*")
+    graph.connect(director["id"], 3, summary["id"], 0, "*")
+    graph.connect(source["id"], 0, run_id["id"], "source_image", "IMAGE")
+    graph.connect(director["id"], 1, run_id["id"], "snapshot", "STRING")
+    graph.connect(director_seed["id"], 0, run_id["id"], "director_seed", "INT")
+    graph.connect(render_seed["id"], 0, run_id["id"], "render_seed_base", "INT")
+    graph.connect(source["id"], 0, loop["id"], 0, "IMAGE")
+    graph.connect(director["id"], 2, loop["id"], 1, "INT")
+    graph.connect(director["id"], 0, stage["id"], "scenario", "STRING")
+    graph.connect(director["id"], 1, stage["id"], "snapshot", "STRING")
+    graph.connect(loop["id"], 1, stage["id"], "index", "INT")
+    graph.connect(render_seed["id"], 0, stage_seed["id"], 0, "INT")
+    graph.connect(loop["id"], 1, stage_seed["id"], 1, "INT")
+    graph.connect(source["id"], 0, renderer["id"], "source_image", "IMAGE")
+    graph.connect(loop["id"], 2, renderer["id"], "previous_frame", "IMAGE")
+    graph.connect(stage["id"], 1, renderer["id"], "render_prompt", "STRING")
+    graph.connect(stage_seed["id"], 0, renderer["id"], "seed", "INT")
+    graph.connect(denoise["id"], 0, renderer["id"], "denoise", "FLOAT")
+    graph.connect(size["id"], 0, renderer["id"], "size", "INT")
+    graph.connect(strength["id"], 0, renderer["id"], "lora_strength", "FLOAT")
+    graph.connect(renderer["id"], 0, save["id"], "image", "IMAGE")
+    graph.connect(source["id"], 0, save["id"], "source_image", "IMAGE")
+    graph.connect(run_id["id"], 0, save["id"], "run_id", "STRING")
+    graph.connect(loop["id"], 1, save["id"], "stage_index", "INT")
+    graph.connect(director["id"], 2, save["id"], "stage_count", "INT")
+    graph.connect(director["id"], 0, save["id"], "scenario", "STRING")
+    graph.connect(director["id"], 1, save["id"], "plan_snapshot", "STRING")
+    graph.connect(stage["id"], 0, save["id"], "stage_prompt", "STRING")
+    graph.connect(stage["id"], 1, save["id"], "render_prompt", "STRING")
+    graph.connect(director_seed["id"], 0, save["id"], "director_seed", "INT")
+    graph.connect(stage_seed["id"], 0, save["id"], "render_seed", "INT")
+    graph.connect(settings["id"], 0, save["id"], "settings_json", "STRING")
+    graph.connect(save["id"], 1, path["id"], 0, "*")
+    graph.connect(loop["id"], 0, loop_end["id"], 0, "FLOW_CONTROL")
+    graph.connect(save["id"], 0, loop_end["id"], 1, "IMAGE")
+    graph.connect(loop_end["id"], 0, preview["id"], 0, "IMAGE")
+    return workflow_document(
+        "actor-progression-escalation-loop", graph, [director_def, renderer_def], 0.2, (290, 330)
+    )
+
+
 def main():
     workflows = {
         "actor-idea-sketch-batch.json": build_sketch_workflow(),
@@ -633,6 +881,7 @@ def main():
         "actor-finalize-direct-uplift.json": build_finalizer("direct-uplift", False, True, 0.65),
         "actor-finalize-fresh-render.json": build_finalizer("fresh-render", True, False),
         "actor-finalize-hybrid.json": build_finalizer("hybrid", True, True, 0.85),
+        "actor-progression-escalation-loop.json": build_progression_workflow(),
     }
     for filename, workflow in workflows.items():
         path = WF_DIR / filename

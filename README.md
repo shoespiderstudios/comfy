@@ -15,6 +15,7 @@ Locally developed nodes required by these workflows live in [`custom_nodes/`](cu
 - `actor-finalize-direct-uplift.json` reconstructs a selected sketch at 832px with its original short scene card, an 18-step schedule, and 0.65 denoise.
 - `actor-finalize-fresh-render.json` refines the selected direction and renders from fresh 1024px noise.
 - `actor-finalize-hybrid.json` refines the selected direction and reconstructs the sketch at 0.85 denoise.
+- `actor-progression-escalation-loop.json` plans a complete source-aware progression once, then carries each pencil-sketch stage into the next render while retaining the original image as a permanent reference anchor.
 
 The sketch workflow writes portable candidates beneath `output/actor-pipeline`. Move approved candidate PNGs from `inbox` to `selected`, while leaving their matching actor files in `actors`. Each finalizer reads the same selected set and writes to its own strategy directory.
 
