@@ -887,9 +887,9 @@ class BuildProgressionPlanPrompt:
 PROGRESSION DIRECTION:
 {direction}
 
-Plan one coherent visual progression of exactly {int(count)} stages. First output one short line beginning SCENARIO: that establishes the setting and premise. Then output exactly one line per stage beginning STAGE 1:, STAGE 2:, and so on.
+Plan one coherent visual progression of exactly {int(count)} visually distinct dramatic beats. First output one short line beginning SCENARIO: that establishes the setting and premise. Then output exactly one line per stage beginning STAGE 1:, STAGE 2:, and so on.
 
-Each stage must describe the complete visible state of that frame in no more than 28 words. Introduce exactly one meaningful visible change from the preceding stage while retaining all still-relevant people, objects, positions, wardrobe, environment, time, and consequences. Stage 1 should be a modest development from the source; the final stage should be the logical culmination. Use only concrete, photographable details. Keep limb ownership and spatial relationships unambiguous. Do not write analysis, alternatives, headings, blank lines, or continuation lines."""
+Each stage must describe the complete visible state of that frame in no more than 36 words. Every consecutive stage must read as a substantially different thumbnail: decisively change whole-body pose, location, interaction, camera framing, or a major object or environmental state. Mere changes of expression, hand position, limb angle, clothing detail, or rendering are not sufficient. Stage 1 must already depart clearly from the source and establish a new action. Intermediate stages should advance, complicate, or intensify that action; the final stage should be its unmistakable culmination or aftermath. Preserve subject identities and logical consequences, but freely recompose poses and spatial relationships as the action requires. Use only concrete, photographable details and keep limb ownership unambiguous. Do not write analysis, alternatives, headings, blank lines, or continuation lines."""
         return (prompt,)
 
 
@@ -975,8 +975,10 @@ class ProgressionStageAtIndex:
         render_prompt = (
             f"SCENARIO: {scenario}\n"
             f"CURRENT VISIBLE STATE — STAGE {index + 1} OF {len(stages)}: {stage}\n"
-            "Continue naturally from the previous frame. Preserve the source subjects' identities and every "
-            "still-relevant established detail. Show only the current visible state, not a collage or multiple moments."
+            "Enact this new stage decisively. Use the previous frame only for continuity, not as a composition to trace. "
+            "Reposition bodies, objects, and camera as necessary so the change is obvious at thumbnail size. Preserve "
+            "subject identities and logical consequences, but do not merely redraw the preceding frame with cosmetic "
+            "differences. Show only the current visible state, not a collage or multiple moments."
         )
         return (stage, render_prompt)
 
@@ -1029,6 +1031,10 @@ class SaveProgressionFrame:
                 "director_seed": ("INT", {"forceInput": True}),
                 "render_seed": ("INT", {"forceInput": True}),
                 "settings_json": ("STRING", {"forceInput": True}),
+                "denoise": ("FLOAT", {"forceInput": True}),
+                "size": ("INT", {"forceInput": True}),
+                "lora_strength": ("FLOAT", {"forceInput": True}),
+                "use_original_anchor": ("BOOLEAN", {"forceInput": True}),
                 "progression_root": ("STRING", {"default": "actor-progression"}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
@@ -1046,7 +1052,8 @@ class SaveProgressionFrame:
 
     def save(self, image, source_image, run_id, stage_index, stage_count, scenario,
              plan_snapshot, stage_prompt, render_prompt, director_seed, render_seed,
-             settings_json, progression_root, prompt=None, extra_pnginfo=None):
+             settings_json, denoise, size, lora_strength, use_original_anchor,
+             progression_root, prompt=None, extra_pnginfo=None):
         if not re.fullmatch(r"progression_[A-Za-z0-9_-]+", str(run_id)):
             raise ValueError("Invalid progression run ID")
         root = _safe_root(progression_root)
@@ -1059,6 +1066,12 @@ class SaveProgressionFrame:
             settings = json.loads(settings_json or "{}")
         except json.JSONDecodeError as exc:
             raise ValueError(f"settings_json is not valid JSON: {exc}") from exc
+        settings["runtime"] = {
+            "denoise": float(denoise),
+            "size": int(size),
+            "lora_strength": float(lora_strength),
+            "use_original_anchor": bool(use_original_anchor),
+        }
         try:
             plan = json.loads(plan_snapshot)
         except json.JSONDecodeError as exc:

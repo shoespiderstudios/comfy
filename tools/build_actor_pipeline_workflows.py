@@ -700,6 +700,16 @@ def progression_sketch_renderer_subgraph():
     previous_latent = graph.add(base.clean_node("VAEEncode", 711, "Encode previous frame", (-70, 70)))
     positive_ref = graph.add(base.clean_node("ReferenceLatent", 712, "Original anchor — positive", (300, 70)))
     negative_ref = graph.add(base.clean_node("ReferenceLatent", 713, "Original anchor — negative", (300, 200)))
+    positive_switch = graph.add(base.custom_node(
+        "ComfySwitchNode", 721, "Optional original anchor — positive", (700, 30),
+        [("on_false", "CONDITIONING", False), ("on_true", "CONDITIONING", False),
+         ("switch", "BOOLEAN", True)], [("output", "CONDITIONING")], [False], (350, 130)
+    ))
+    negative_switch = graph.add(base.custom_node(
+        "ComfySwitchNode", 722, "Optional original anchor — negative", (700, 190),
+        [("on_false", "CONDITIONING", False), ("on_true", "CONDITIONING", False),
+         ("switch", "BOOLEAN", True)], [("output", "CONDITIONING")], [False], (350, 130)
+    ))
     scheduler = graph.add(base.clean_node("Flux2Scheduler", 714, "Three-step draft schedule", (820, 690), [3, 320, 320]))
     noise = graph.add(base.clean_node("RandomNoise", 715, "Stage noise", (820, 830), [0, "fixed"]))
     sampler = graph.add(base.clean_node("KSamplerSelect", 716, "Euler", (820, 950), ["euler"]))
@@ -731,9 +741,15 @@ def progression_sketch_renderer_subgraph():
     graph.connect(zero["id"], 0, negative_ref["id"], "conditioning", "CONDITIONING")
     graph.connect(source_latent["id"], 0, positive_ref["id"], "latent", "LATENT")
     graph.connect(source_latent["id"], 0, negative_ref["id"], "latent", "LATENT")
+    graph.connect(encode["id"], 0, positive_switch["id"], "on_false", "CONDITIONING")
+    graph.connect(positive_ref["id"], 0, positive_switch["id"], "on_true", "CONDITIONING")
+    graph.connect(zero["id"], 0, negative_switch["id"], "on_false", "CONDITIONING")
+    graph.connect(negative_ref["id"], 0, negative_switch["id"], "on_true", "CONDITIONING")
+    graph.connect(-10, 7, positive_switch["id"], "switch", "BOOLEAN")
+    graph.connect(-10, 7, negative_switch["id"], "switch", "BOOLEAN")
     graph.connect(lora["id"], 0, guider["id"], "model", "MODEL")
-    graph.connect(positive_ref["id"], 0, guider["id"], "positive", "CONDITIONING")
-    graph.connect(negative_ref["id"], 0, guider["id"], "negative", "CONDITIONING")
+    graph.connect(positive_switch["id"], 0, guider["id"], "positive", "CONDITIONING")
+    graph.connect(negative_switch["id"], 0, guider["id"], "negative", "CONDITIONING")
     graph.connect(-10, 5, scheduler["id"], "width", "INT")
     graph.connect(-10, 5, scheduler["id"], "height", "INT")
     graph.connect(scheduler["id"], 0, split["id"], "sigmas", "SIGMAS")
@@ -751,7 +767,8 @@ def progression_sketch_renderer_subgraph():
         graph_id,
         "Hybrid progression sketch — original anchor plus previous frame",
         [("source_image", "IMAGE"), ("previous_frame", "IMAGE"), ("render_prompt", "STRING"),
-         ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("lora_strength", "FLOAT")],
+         ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("lora_strength", "FLOAT"),
+         ("use_original_anchor", "BOOLEAN")],
         [("image", "IMAGE")],
         graph,
         2050,
@@ -763,10 +780,10 @@ def build_progression_workflow():
     renderer_id, renderer_def = progression_sketch_renderer_subgraph()
     graph = base.Graph(object_links=False)
     graph.add(base.clean_node("MarkdownNote", 4001, "How this workflow works", (-1320, -470), [
-        "# ACTOR PROGRESSION / ESCALATION LOOP\n\nThe local vision director studies the source once and plans a complete sequence. Each render starts from the preceding frame, while the original image remains a permanent reference anchor. This gives visible continuity without allowing identity drift to compound unchecked.\n\nThe output is deliberately rough pencil storyboard art for fast review, not final anatomy or finish."
+        "# ACTOR PROGRESSION / ESCALATION LOOP\n\nThe local vision director studies the source once and plans a complete sequence of visibly distinct dramatic beats. Each render starts from the preceding frame. The original source seeds stage one and can optionally remain attached as a permanent reference.\n\nThe output is deliberately rough pencil storyboard art for fast review, not final anatomy or finish."
     ], (700, 360)))
     graph.add(base.clean_node("MarkdownNote", 4002, "Configuration guide", (-580, -470), [
-        "## CONFIGURATION\n\n**Progression direction** — describe the kind of arc and any boundaries. The director invents the individual stages.\n\n**Number of stages** — 6–10 is a useful range. More stages require a longer language response and increase drift.\n\n**Previous-frame denoise** — lower values preserve the prior frame; higher values permit larger changes. Try 0.45 for conservative continuity, 0.65 for balanced progression, or 0.80 for dramatic changes.\n\n**Draft size** — 256 is fastest; 320 is the default; 384 is easier to judge.\n\n**Sketch LoRA strength** — 1.0 is the intended effect. Lower it if the drawing becomes too abstract.\n\nRandomize either seed to create a new plan or visual interpretation."
+        "## CONFIGURATION\n\n**Progression direction** — describe the kind of arc and any boundaries. Ask for decisive action rather than gradual micro-movements.\n\n**Number of stages** — 6 is the default. Fewer stages create larger narrative jumps; more stages encourage smaller changes and increase drift.\n\n**Previous-frame denoise** — lower values preserve the prior composition; higher values permit larger changes. Try 0.55 for conservative continuity, 0.82 for decisive progression, or 0.95 for near-redrawing.\n\n**Use permanent original anchor** — OFF is recommended for visible progression. Turn it on only if subject identity drifts too much; it may strongly preserve the source pose and composition.\n\n**Draft size** — 256 is fastest; 320 is the default; 384 is easier to judge.\n\n**Sketch LoRA strength** — 1.0 is the intended effect. Lower it if the drawing becomes too abstract.\n\nRandomize either seed to create a new plan or visual interpretation."
     ], (730, 500)))
     graph.add(base.clean_node("MarkdownNote", 4003, "Outputs and metadata", (190, -470), [
         "## OUTPUTS\n\nEach run is saved beneath `output/actor-progression/<run-id>/`. The folder contains `source.png` and numbered stage images.\n\nEvery stage PNG embeds the complete scenario, full stage plan, current stage, actual render prompt, seeds, model settings, denoise, dimensions, and source path. This makes any promising stage reproducible and suitable for a later full-render workflow."
@@ -775,12 +792,13 @@ def build_progression_workflow():
     direction = graph.add(base.clean_node("TextBox1", 4005, "Progression direction", (-940, 30), [
         "Create a coherent escalating sequence with increasingly consequential visible action. Keep the same subjects and environment unless a change is explicitly established."
     ], (570, 230)))
-    count = graph.add(base.clean_node("PrimitiveInt", 4006, "Number of stages", (-940, 300), [8, "fixed"]))
+    count = graph.add(base.clean_node("PrimitiveInt", 4006, "Number of stages", (-940, 300), [6, "fixed"]))
     director_seed = graph.add(base.clean_node("SeedNode", 4007, "Director seed", (-940, 450), [314159265, "randomize"]))
     render_seed = graph.add(base.clean_node("SeedNode", 4008, "Render seed base", (-940, 590), [271828182, "randomize"]))
-    denoise = graph.add(base.clean_node("PrimitiveFloat", 4009, "Previous-frame denoise", (-600, 330), [0.65]))
+    denoise = graph.add(base.clean_node("PrimitiveFloat", 4009, "Previous-frame denoise", (-600, 330), [0.82]))
     size = graph.add(base.clean_node("PrimitiveInt", 4010, "Square draft size", (-600, 470), [320, "fixed"]))
     strength = graph.add(base.clean_node("PrimitiveFloat", 4011, "Sketch LoRA strength", (-600, 610), [1.0]))
+    original_anchor = graph.add(base.clean_node("PrimitiveBoolean", 4025, "Use permanent original anchor", (-600, 750), [False]))
     director = graph.add(base.subgraph_node(
         4012, director_id, "Plan complete progression once", (-260, 20),
         [("source_image", "IMAGE"), ("direction", "STRING"), ("count", "INT"), ("seed", "INT")],
@@ -795,7 +813,7 @@ def build_progression_workflow():
          ("director_seed", "INT", False), ("render_seed_base", "INT", False)],
         [("run_id", "STRING")], [], (390, 150)
     ))
-    loop = graph.add(base.clean_node("easy forLoopStart", 4016, "Progression loop", (750, 20), [8]))
+    loop = graph.add(base.clean_node("easy forLoopStart", 4016, "Progression loop", (750, 20), [6]))
     stage = graph.add(story_node(
         "ProgressionStageAtIndex", 4017, "Current logical stage", (1060, 20),
         [("scenario", "STRING", False), ("snapshot", "STRING", False), ("index", "INT", False)],
@@ -805,7 +823,8 @@ def build_progression_workflow():
     renderer = graph.add(base.subgraph_node(
         4019, renderer_id, "Hybrid pencil-sketch stage renderer", (1550, 20),
         [("source_image", "IMAGE"), ("previous_frame", "IMAGE"), ("render_prompt", "STRING"),
-         ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("lora_strength", "FLOAT")],
+         ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("lora_strength", "FLOAT"),
+         ("use_original_anchor", "BOOLEAN")],
         [("image", "IMAGE")], (520, 270)
     ))
     settings_text = json.dumps({
@@ -822,8 +841,10 @@ def build_progression_workflow():
          ("plan_snapshot", "STRING", False), ("stage_prompt", "STRING", False),
          ("render_prompt", "STRING", False), ("director_seed", "INT", False),
          ("render_seed", "INT", False), ("settings_json", "STRING", False),
+         ("denoise", "FLOAT", False), ("size", "INT", False), ("lora_strength", "FLOAT", False),
+         ("use_original_anchor", "BOOLEAN", False),
          ("progression_root", "STRING", True)],
-        [("image", "IMAGE"), ("saved_path", "STRING")], ["actor-progression"], (500, 370)
+        [("image", "IMAGE"), ("saved_path", "STRING")], ["actor-progression"], (500, 450)
     ))
     path = graph.add(base.clean_node("PreviewAny", 4022, "Last saved stage path", (2700, 20), []))
     loop_end = graph.add(base.clean_node("easy forLoopEnd", 4023, "Carry stage into next iteration", (2700, 230), []))
@@ -853,6 +874,7 @@ def build_progression_workflow():
     graph.connect(denoise["id"], 0, renderer["id"], "denoise", "FLOAT")
     graph.connect(size["id"], 0, renderer["id"], "size", "INT")
     graph.connect(strength["id"], 0, renderer["id"], "lora_strength", "FLOAT")
+    graph.connect(original_anchor["id"], 0, renderer["id"], "use_original_anchor", "BOOLEAN")
     graph.connect(renderer["id"], 0, save["id"], "image", "IMAGE")
     graph.connect(source["id"], 0, save["id"], "source_image", "IMAGE")
     graph.connect(run_id["id"], 0, save["id"], "run_id", "STRING")
@@ -865,6 +887,10 @@ def build_progression_workflow():
     graph.connect(director_seed["id"], 0, save["id"], "director_seed", "INT")
     graph.connect(stage_seed["id"], 0, save["id"], "render_seed", "INT")
     graph.connect(settings["id"], 0, save["id"], "settings_json", "STRING")
+    graph.connect(denoise["id"], 0, save["id"], "denoise", "FLOAT")
+    graph.connect(size["id"], 0, save["id"], "size", "INT")
+    graph.connect(strength["id"], 0, save["id"], "lora_strength", "FLOAT")
+    graph.connect(original_anchor["id"], 0, save["id"], "use_original_anchor", "BOOLEAN")
     graph.connect(save["id"], 1, path["id"], 0, "*")
     graph.connect(loop["id"], 0, loop_end["id"], 0, "FLOW_CONTROL")
     graph.connect(save["id"], 0, loop_end["id"], 1, "IMAGE")
