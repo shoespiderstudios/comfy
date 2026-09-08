@@ -96,7 +96,7 @@ def vision_director_subgraph():
     ))
     generate = graph.add(base.clean_node(
         "TextGenerate", 109, "Inventory and direct once", (1190, 100),
-        ["", 520, "on", 0.9, 40, 0.9, 0.02, 0.5, 1, 0.1, False, True], (480, 350)
+        ["", 420, "on", 0.7, 40, 0.9, 0.02, 1.08, 1, 0.2, False, True], (480, 350)
     ))
     parse = graph.add(story_node(
         "ParseActorVisionSceneBatch", 110, "Split inventory and scene cards", (1720, 130),
@@ -424,6 +424,9 @@ def build_ultrafast_sketch_workflow():
             "thinking": False,
             "combined_actor_inventory_and_scene_batch": True,
             "vision_sheet_max_dimension": 448,
+            "max_tokens": 420,
+            "temperature": 0.7,
+            "repetition_penalty": 1.08,
         },
         "sketch": {
             "model": "flux-2-klein-4b-fp8",

@@ -703,7 +703,7 @@ class BuildActorVisionSceneBatchPrompt:
 DIRECTION:
 {direction}
 
-Immediately invent exactly {int(count)} distinct photographable scenes using these actors. Put each complete scene on one line beginning SCENE 1:, SCENE 2:, and so on. Put all scene lines first. Limit each scene to 32 words: name ACTOR A, ACTOR B, and ACTOR C; give their positions and one clear visible action; then state setting, framing, and lighting. Use simple concrete language. Avoid tangled bodies, unclear limb ownership, impossible joints, mirrors, crowds, fantasy, science fiction, alternatives, analysis, blank lines, and continuation lines.
+Immediately invent exactly {int(count)} distinct photographable scenes using these actors. Put each complete scene on one line beginning SCENE 1:, SCENE 2:, and so on. Put all scene lines first. Limit each scene to 20 words: explicitly name ACTOR A, ACTOR B, and ACTOR C; state their placement and visible action, setting, framing, and lighting. Use simple concrete language. Avoid tangled bodies, unclear limb ownership, impossible joints, mirrors, crowds, fantasy, science fiction, alternatives, analysis, blank lines, and continuation lines.
 Only after the final scene, optionally add one short line beginning CAST: with stable visible identity traits for each actor. Do not describe source poses, clothing, expressions, or backgrounds."""
         return (prompt,)
 
@@ -761,10 +761,25 @@ class ParseActorVisionSceneBatch:
             fallback = re.sub(r"<\|[^>]+\|>", "", fallback).strip()
             if fallback:
                 cards = [fallback.strip('"')]
+        def is_plausible_scene(card):
+            words = re.findall(r"[A-Za-z]+", card.lower())
+            content = [word for word in words if word not in {"scene", "actor", "a", "b", "c"}]
+            has_all_actors = all(
+                re.search(rf"(?i)\bACTOR\s+{label}\b", card)
+                for label in ("A", "B", "C")
+            )
+            diverse_enough = len(content) >= 6 and len(set(content)) / len(content) >= 0.4
+            return has_all_actors and diverse_enough
+
+        cards = [card for card in cards if is_plausible_scene(card)]
         count = min(int(requested_count), len(cards))
         cards = cards[:count]
         if not cards:
-            raise ValueError("The combined vision/director reply was empty after removing formatting markers")
+            excerpt = re.sub(r"\s+", " ", text).strip()[:500]
+            raise ValueError(
+                "The combined vision/director reply contained no valid three-actor scenes. "
+                f"Raw reply excerpt: {excerpt or '<empty>'}"
+            )
         return (
             inventory,
             json.dumps(cards, ensure_ascii=False),
