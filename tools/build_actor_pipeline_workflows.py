@@ -689,8 +689,8 @@ def progression_sketch_renderer_subgraph():
     clip = graph.add(base.clean_node("CLIPLoader", 703, "Qwen 3 4B Flux encoder", (-520, 720), ["qwen_3_4b.safetensors", "flux2", "default"]))
     vae = graph.add(base.clean_node("VAELoader", 704, "Flux.2 VAE", (-520, 870), ["flux2-vae.safetensors"]))
     style = graph.add(base.clean_node(
-        "StringConcatenate", 705, "Apply pencil-storyboard treatment", (-80, 350),
-        ["rough monochrome pencil storyboard, loose construction lines, simple tonal shading, readable silhouettes", "", ", "]
+        "StringConcatenate", 705, "Apply pencil concept-sketch treatment", (-80, 350),
+        ["rough monochrome pencil concept sketch, loose construction lines, simple tonal shading, readable silhouettes, one full-canvas composition", "", ", "]
     ))
     encode = graph.add(base.clean_node("CLIPTextEncode", 706, "Encode current visible state", (340, 440), [""]))
     zero = graph.add(base.clean_node("ConditioningZeroOut", 707, "Zero negative", (670, 620)))
@@ -780,10 +780,10 @@ def build_progression_workflow():
     renderer_id, renderer_def = progression_sketch_renderer_subgraph()
     graph = base.Graph(object_links=False)
     graph.add(base.clean_node("MarkdownNote", 4001, "How this workflow works", (-1320, -470), [
-        "# ACTOR PROGRESSION / ESCALATION LOOP\n\nThe local vision director studies the source once and plans a complete sequence of visibly distinct dramatic beats. Each render starts from the preceding frame. The original source seeds stage one and can optionally remain attached as a permanent reference.\n\nThe output is deliberately rough pencil storyboard art for fast review, not final anatomy or finish."
+        "# ACTOR PROGRESSION / ESCALATION LOOP\n\nThe local vision director studies the source once and plans a complete sequence of visibly distinct dramatic beats. Each render starts from the preceding image. Planning and stage numbering are retained in metadata but deliberately withheld from the image encoder, which receives only one frozen still description. The original source seeds the first image and can optionally remain attached as a permanent reference.\n\nThe output is deliberately rough pencil concept art for fast review, not final anatomy or finish."
     ], (700, 360)))
     graph.add(base.clean_node("MarkdownNote", 4002, "Configuration guide", (-580, -470), [
-        "## CONFIGURATION\n\n**Progression direction** — describe the kind of arc and any boundaries. Ask for decisive action rather than gradual micro-movements.\n\n**Number of stages** — 6 is the default. Fewer stages create larger narrative jumps; more stages encourage smaller changes and increase drift.\n\n**Previous-frame denoise** — lower values preserve the prior composition; higher values permit larger changes. Try 0.55 for conservative continuity, 0.82 for decisive progression, or 0.95 for near-redrawing.\n\n**Use permanent original anchor** — OFF is recommended for visible progression. Turn it on only if subject identity drifts too much; it may strongly preserve the source pose and composition.\n\n**Draft size** — 256 is fastest; 320 is the default; 384 is easier to judge.\n\n**Sketch LoRA strength** — 1.0 is the intended effect. Lower it if the drawing becomes too abstract.\n\nRandomize either seed to create a new plan or visual interpretation."
+        "## CONFIGURATION\n\n**Progression direction** — describe the kind of arc and any boundaries. Ask for decisive visible states; the director converts the arc into independent frozen compositions.\n\n**Number of stages** — 6 is the default. Fewer stages create larger narrative jumps; more stages encourage smaller changes and increase drift.\n\n**Previous-image denoise** — lower values preserve the prior composition; higher values permit larger changes. Try 0.55 for conservative continuity, 0.82 for decisive progression, or 0.95 for near-redrawing.\n\n**Use permanent original anchor** — OFF is recommended for visible progression. Turn it on only if subject identity drifts too much; it may strongly preserve the source pose and composition.\n\n**Draft size** — 256 is fastest; 320 is the default; 384 is easier to judge.\n\n**Sketch LoRA strength** — 1.0 is the intended effect. Lower it if the drawing becomes too abstract or starts resembling a storyboard page.\n\nRandomize either seed to create a new plan or visual interpretation."
     ], (730, 500)))
     graph.add(base.clean_node("MarkdownNote", 4003, "Outputs and metadata", (190, -470), [
         "## OUTPUTS\n\nEach run is saved beneath `output/actor-progression/<run-id>/`. The folder contains `source.png` and numbered stage images.\n\nEvery stage PNG embeds the complete scenario, full stage plan, current stage, actual render prompt, seeds, model settings, denoise, dimensions, and source path. This makes any promising stage reproducible and suitable for a later full-render workflow."
@@ -821,7 +821,7 @@ def build_progression_workflow():
     ))
     stage_seed = graph.add(base.clean_node("easy mathInt", 4018, "Stage seed = base + index", (1060, 220), [0, 0, "add"]))
     renderer = graph.add(base.subgraph_node(
-        4019, renderer_id, "Hybrid pencil-sketch stage renderer", (1550, 20),
+        4019, renderer_id, "Hybrid pencil concept-sketch renderer", (1550, 20),
         [("source_image", "IMAGE"), ("previous_frame", "IMAGE"), ("render_prompt", "STRING"),
          ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("lora_strength", "FLOAT"),
          ("use_original_anchor", "BOOLEAN")],

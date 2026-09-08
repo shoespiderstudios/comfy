@@ -887,9 +887,9 @@ class BuildProgressionPlanPrompt:
 PROGRESSION DIRECTION:
 {direction}
 
-Plan one coherent visual progression of exactly {int(count)} visually distinct dramatic beats. First output one short line beginning SCENARIO: that establishes the setting and premise. Then output exactly one line per stage beginning STAGE 1:, STAGE 2:, and so on.
+Plan one coherent visual progression of exactly {int(count)} visually distinct dramatic beats. First output one short line beginning SCENARIO: that establishes only the shared setting and premise. The SCENARIO line must not mention frames, stages, sequences, panels, storyboards, or the requested count. Then output exactly one line per stage beginning STAGE 1:, STAGE 2:, and so on.
 
-Each stage must describe the complete visible state of that frame in no more than 36 words. Every consecutive stage must read as a substantially different thumbnail: decisively change whole-body pose, location, interaction, camera framing, or a major object or environmental state. Mere changes of expression, hand position, limb angle, clothing detail, or rendering are not sufficient. Stage 1 must already depart clearly from the source and establish a new action. Intermediate stages should advance, complicate, or intensify that action; the final stage should be its unmistakable culmination or aftermath. Preserve subject identities and logical consequences, but freely recompose poses and spatial relationships as the action requires. Use only concrete, photographable details and keep limb ownership unambiguous. Do not write analysis, alternatives, headings, blank lines, or continuation lines."""
+The text after every STAGE label must be a self-contained description of one frozen, presently visible still image in no more than 36 words. Describe poses as static end states, not trajectories: write where each person, limb, object, and camera is now, never how anything moved there. Do not refer to another stage or use sequence vocabulary such as previous, next, before, after, progression, culmination, frame, panel, or sequence inside a stage description. Every consecutive stage must nevertheless differ substantially through whole-body pose, location, interaction, camera framing, or a major object or environmental state. Mere changes of expression, hand position, limb angle, clothing detail, or rendering are not sufficient. The first state must depart clearly from the source; later states must make the intended escalation visible without narrating time. Preserve subject identities and logical consequences, but freely recompose poses and spatial relationships. Use only concrete, photographable details, keep limb ownership unambiguous, and describe every continuing person exactly once. Do not write analysis, alternatives, extra headings, blank lines, or continuation lines."""
         return (prompt,)
 
 
@@ -972,13 +972,13 @@ class ProgressionStageAtIndex:
         if index < 0 or index >= len(stages):
             raise IndexError(f"Progression index {index} is outside a plan of {len(stages)} stages")
         stage = str(stages[index])
+        # The complete plan and scenario remain available for metadata, but must not
+        # reach the image encoder. Sequence vocabulary strongly biases sketch models
+        # toward comic strips, contact sheets, repeated figures, and motion trails.
         render_prompt = (
-            f"SCENARIO: {scenario}\n"
-            f"CURRENT VISIBLE STATE — STAGE {index + 1} OF {len(stages)}: {stage}\n"
-            "Enact this new stage decisively. Use the previous frame only for continuity, not as a composition to trace. "
-            "Reposition bodies, objects, and camera as necessary so the change is obvious at thumbnail size. Preserve "
-            "subject identities and logical consequences, but do not merely redraw the preceding frame with cosmetic "
-            "differences. Show only the current visible state, not a collage or multiple moments."
+            f"Single candid still image: {stage}\n"
+            "One unified scene captured at one instant from one camera viewpoint. Each person appears exactly once. "
+            "The composition fills the entire square canvas as one continuous space with clear spatial relationships."
         )
         return (stage, render_prompt)
 
