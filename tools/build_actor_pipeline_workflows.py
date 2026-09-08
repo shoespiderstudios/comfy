@@ -138,6 +138,17 @@ def klein_sketch_subgraph(render_size=384, steps=4, variant="standard"):
     graph_id = stable_id(f"klein-sketch-{render_size}-{steps}-{variant}")
     graph = base.Graph(object_links=True)
     model = graph.add(base.clean_node("UNETLoader", 201, "Flux.2 Klein 4B FP8", (-450, 500), ["flux-2-klein-4b-fp8.safetensors", "default"]))
+    model_source = model
+    if variant == "ultrafast":
+        sketch_lora = graph.add(base.custom_node(
+            "LoraLoaderModelOnly", 225, "Klein sketch-generator LoRA", (-80, 380),
+            [("model", "MODEL", False), ("lora_name", "COMBO", True),
+             ("strength_model", "FLOAT", True)],
+            [("MODEL", "MODEL")],
+            ["sketch_generator_klein_4b.safetensors", 1.0], (330, 110)
+        ))
+        graph.connect(model["id"], 0, sketch_lora["id"], "model", "MODEL")
+        model_source = sketch_lora
     clip = graph.add(base.clean_node("CLIPLoader", 202, "Qwen 3 4B Flux encoder", (-450, 650), ["qwen_3_4b.safetensors", "flux2", "default"]))
     vae = graph.add(base.clean_node("VAELoader", 203, "Flux.2 VAE", (-450, 800), ["flux2-vae.safetensors"]))
     encode = graph.add(base.clean_node("CLIPTextEncode", 204, "Encode short scene card", (0, 520), [""]))
@@ -165,11 +176,19 @@ def klein_sketch_subgraph(render_size=384, steps=4, variant="standard"):
     latent = graph.add(base.clean_node("EmptyFlux2LatentImage", 222, f"{render_size} x {render_size} sketch latent", (1160, 760), [render_size, render_size, 1]))
     sample = graph.add(base.clean_node("SamplerCustomAdvanced", 223, f"{steps}-step sketch", (1480, 560)))
     decode = graph.add(base.clean_node("VAEDecode", 224, "Decode sketch", (1770, 560)))
-    graph.connect(model["id"], 0, guider["id"], "model", "MODEL")
+    graph.connect(model_source["id"], 0, guider["id"], "model", "MODEL")
     graph.connect(positive["id"], 0, guider["id"], "positive", "CONDITIONING")
     graph.connect(negative["id"], 0, guider["id"], "negative", "CONDITIONING")
     graph.connect(clip["id"], 0, encode["id"], "clip", "CLIP")
-    graph.connect(-10, 3, encode["id"], "text", "STRING")
+    if variant == "ultrafast":
+        style_prompt = graph.add(base.clean_node(
+            "StringConcatenate", 226, "Apply pencil-storyboard treatment", (400, 430),
+            ["rough monochrome pencil storyboard, loose construction lines, simple tonal shading, readable silhouettes", "", ", "]
+        ))
+        graph.connect(-10, 3, style_prompt["id"], "string_b", "STRING")
+        graph.connect(style_prompt["id"], 0, encode["id"], "text", "STRING")
+    else:
+        graph.connect(-10, 3, encode["id"], "text", "STRING")
     graph.connect(-10, 4, noise["id"], "noise_seed", "INT")
     graph.connect(noise["id"], 0, sample["id"], "noise", "NOISE")
     graph.connect(guider["id"], 0, sample["id"], "guider", "GUIDER")
@@ -430,6 +449,9 @@ def build_ultrafast_sketch_workflow():
         },
         "sketch": {
             "model": "flux-2-klein-4b-fp8",
+            "lora": "sketch_generator_klein_4b",
+            "lora_strength": 1.0,
+            "style_prefix": "rough monochrome pencil storyboard, loose construction lines, simple tonal shading, readable silhouettes",
             "width": 256,
             "height": 256,
             "steps": 2,
