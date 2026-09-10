@@ -1013,12 +1013,15 @@ class ProgressionStageAtIndex:
 
 
 class RealisticProgressionStageAtIndex(ProgressionStageAtIndex):
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("stage_prompt", "composition_prompt", "restoration_prompt")
+
     def get(self, scenario, snapshot, index):
         stages = json.loads(snapshot)
         if index < 0 or index >= len(stages):
             raise IndexError(f"Progression index {index} is outside a plan of {len(stages)} stages")
         stage = str(stages[index])
-        render_prompt = (
+        composition_prompt = (
             f"Photorealistic high-end editorial photograph: {stage}\n"
             "Render the specified state decisively, including every requested change of pose, activity, placement, "
             "camera viewpoint, clothing, and environment. Identity continuity must not preserve the source pose, "
@@ -1028,7 +1031,14 @@ class RealisticProgressionStageAtIndex(ProgressionStageAtIndex):
             "weight, natural skin texture, realistic fabric and material detail, coherent perspective, controlled "
             "depth of field, and professionally motivated lighting."
         )
-        return (stage, render_prompt)
+        restoration_prompt = (
+            f"Photorealistic identity and anatomy refinement of this exact established composition: {stage}\n"
+            "Preserve the supplied composition's pose, action, subject placement, camera viewpoint, crop, environment, "
+            "lighting, and clothing state. Use the original reference only to recover each continuing adult's recognizable "
+            "facial identity, apparent age, body type, and distinguishing traits. Refine eyes, teeth, skin, hands, fingers, "
+            "limb connections, and other conspicuous local anatomy while keeping every body distinct and in the same place."
+        )
+        return (stage, composition_prompt, restoration_prompt)
 
 
 class ProgressionRunId:
@@ -1088,6 +1098,11 @@ class SaveProgressionFrame:
             "optional": {
                 "steps": ("INT", {"forceInput": True, "min": 1, "max": 1000}),
                 "guidance": ("FLOAT", {"forceInput": True, "min": 0.0, "max": 100.0}),
+                "pass_name": ("STRING", {"default": "final"}),
+                "composition_denoise": ("FLOAT", {"forceInput": True, "min": 0.0, "max": 1.0}),
+                "restoration_denoise": ("FLOAT", {"forceInput": True, "min": 0.0, "max": 1.0}),
+                "composition_steps": ("INT", {"forceInput": True, "min": 1, "max": 1000}),
+                "restoration_steps": ("INT", {"forceInput": True, "min": 1, "max": 1000}),
             },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -1105,7 +1120,10 @@ class SaveProgressionFrame:
     def save(self, image, source_image, run_id, stage_index, stage_count, scenario,
              plan_snapshot, stage_prompt, render_prompt, director_seed, render_seed,
              settings_json, denoise, size, lora_strength, use_original_anchor,
-             progression_root, steps=None, guidance=None, prompt=None, extra_pnginfo=None):
+             progression_root, steps=None, guidance=None, pass_name="final",
+             composition_denoise=None, restoration_denoise=None,
+             composition_steps=None, restoration_steps=None,
+             prompt=None, extra_pnginfo=None):
         if not re.fullmatch(r"progression_[A-Za-z0-9_-]+", str(run_id)):
             raise ValueError("Invalid progression run ID")
         root = _safe_root(progression_root)
@@ -1128,6 +1146,14 @@ class SaveProgressionFrame:
             settings["runtime"]["steps"] = int(steps)
         if guidance is not None:
             settings["runtime"]["guidance"] = float(guidance)
+        if composition_denoise is not None:
+            settings["runtime"]["composition_denoise"] = float(composition_denoise)
+        if restoration_denoise is not None:
+            settings["runtime"]["restoration_denoise"] = float(restoration_denoise)
+        if composition_steps is not None:
+            settings["runtime"]["composition_steps"] = int(composition_steps)
+        if restoration_steps is not None:
+            settings["runtime"]["restoration_steps"] = int(restoration_steps)
         try:
             plan = json.loads(plan_snapshot)
         except json.JSONDecodeError as exc:
@@ -1145,6 +1171,7 @@ class SaveProgressionFrame:
             "render_prompt": str(render_prompt),
             "director_seed": int(director_seed),
             "render_seed": int(render_seed),
+            "pass_name": str(pass_name),
             "settings": settings,
             "source_path": str(source_path),
         }
@@ -1158,7 +1185,9 @@ class SaveProgressionFrame:
         if extra_pnginfo:
             for key, value in extra_pnginfo.items():
                 info.add_text(str(key), json.dumps(value, ensure_ascii=False))
-        destination = run_dir / f"stage_{number:03d}_of_{int(stage_count):03d}.png"
+        clean_pass_name = re.sub(r"[^A-Za-z0-9_-]+", "-", str(pass_name)).strip("-_").lower() or "final"
+        pass_suffix = "" if clean_pass_name == "final" else f"_{clean_pass_name}"
+        destination = run_dir / f"stage_{number:03d}_of_{int(stage_count):03d}{pass_suffix}.png"
         _tensor_to_pil(image).save(destination, pnginfo=info, compress_level=4)
         return (image, str(destination))
 

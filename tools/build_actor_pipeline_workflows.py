@@ -841,85 +841,119 @@ def progression_realistic_renderer_subgraph():
         ["qwen_3_8b.safetensors", "flux2", "default"]
     ))
     vae = graph.add(base.clean_node("VAELoader", 903, "Flux.2 VAE", (-520, 900), ["flux2-vae.safetensors"]))
-    encode = graph.add(base.clean_node("CLIPTextEncode", 904, "Encode detailed still-image prompt", (280, 440), [""]))
-    zero = graph.add(base.clean_node("ConditioningZeroOut", 905, "Zero negative", (610, 620)))
+    encode = graph.add(base.clean_node("CLIPTextEncode", 904, "Encode composition prompt", (250, 430), [""]))
+    zero = graph.add(base.clean_node("ConditioningZeroOut", 905, "Composition zero negative", (580, 610)))
     source_scale = graph.add(image_scale(906, "Original identity anchor — square crop", (-470, -170)))
     previous_scale = graph.add(image_scale(907, "Previous image — square starting image", (-70, -170)))
     source_latent = graph.add(base.clean_node("VAEEncode", 908, "Encode original anchor", (-470, 70)))
     previous_latent = graph.add(base.clean_node("VAEEncode", 909, "Encode previous image", (-70, 70)))
     positive_ref = graph.add(base.clean_node("ReferenceLatent", 910, "Original anchor — positive", (280, 70)))
     negative_ref = graph.add(base.clean_node("ReferenceLatent", 911, "Original anchor — negative", (280, 200)))
-    positive_switch = graph.add(base.custom_node(
-        "ComfySwitchNode", 912, "Optional original anchor — positive", (660, 30),
-        [("on_false", "CONDITIONING", False), ("on_true", "CONDITIONING", False),
-         ("switch", "BOOLEAN", True)], [("output", "CONDITIONING")], [False], (350, 130)
+    composition_scheduler = graph.add(base.clean_node(
+        "Flux2Scheduler", 912, "Composition schedule", (760, 680), [32, 800, 800]
     ))
-    negative_switch = graph.add(base.custom_node(
-        "ComfySwitchNode", 913, "Optional original anchor — negative", (660, 190),
-        [("on_false", "CONDITIONING", False), ("on_true", "CONDITIONING", False),
-         ("switch", "BOOLEAN", True)], [("output", "CONDITIONING")], [False], (350, 130)
+    noise = graph.add(base.clean_node("RandomNoise", 913, "Shared stage noise", (760, 850), [0, "fixed"]))
+    sampler = graph.add(base.clean_node("KSamplerSelect", 914, "Euler", (760, 970), ["euler"]))
+    composition_guider = graph.add(base.clean_node(
+        "CFGGuider", 915, "Composition guidance — no original reference", (1010, 430), [2.0]
     ))
-    scheduler = graph.add(base.clean_node("Flux2Scheduler", 914, "High-quality realistic schedule", (790, 710), [40, 800, 800]))
-    noise = graph.add(base.clean_node("RandomNoise", 915, "Stage noise", (790, 850), [0, "fixed"]))
-    sampler = graph.add(base.clean_node("KSamplerSelect", 916, "Euler", (790, 970), ["euler"]))
-    guider = graph.add(base.clean_node("CFGGuider", 917, "MiracleIn guidance", (1040, 480), [2.0]))
-    split = graph.add(story_node(
-        "SplitSigmasDenoise", 918, "Previous-image denoise", (1070, 730),
+    composition_split = graph.add(story_node(
+        "SplitSigmasDenoise", 916, "Composition denoise", (1040, 690),
         [("sigmas", "SIGMAS", False), ("denoise", "FLOAT", True)],
-        [("high_sigmas", "SIGMAS"), ("low_sigmas", "SIGMAS")], [0.82], (330, 110)
+        [("high_sigmas", "SIGMAS"), ("low_sigmas", "SIGMAS")], [0.88], (330, 110)
     ))
-    sample = graph.add(base.clean_node("SamplerCustomAdvanced", 919, "Render realistic progression image", (1430, 550)))
-    decode = graph.add(base.clean_node("VAEDecode", 920, "Decode realistic image", (1740, 550)))
+    composition_sample = graph.add(base.clean_node(
+        "SamplerCustomAdvanced", 917, "Pass 1 — establish new composition", (1400, 500)
+    ))
+    composition_decode = graph.add(base.clean_node("VAEDecode", 918, "Decode composition candidate", (1710, 500)))
+    restoration_scheduler = graph.add(base.clean_node(
+        "Flux2Scheduler", 919, "Identity/detail restoration schedule", (1390, 860), [16, 800, 800]
+    ))
+    restoration_guider = graph.add(base.clean_node(
+        "CFGGuider", 920, "Pass 2 guidance — original identity reference", (1750, 760), [2.0]
+    ))
+    restoration_split = graph.add(story_node(
+        "SplitSigmasDenoise", 921, "Low-denoise identity/detail pass", (1750, 900),
+        [("sigmas", "SIGMAS", False), ("denoise", "FLOAT", True)],
+        [("high_sigmas", "SIGMAS"), ("low_sigmas", "SIGMAS")], [0.28], (340, 110)
+    ))
+    restoration_sample = graph.add(base.clean_node(
+        "SamplerCustomAdvanced", 922, "Pass 2 — restore identity and details", (2140, 680)
+    ))
+    restoration_decode = graph.add(base.clean_node("VAEDecode", 923, "Decode restored final image", (2460, 680)))
+    restoration_encode = graph.add(base.clean_node(
+        "CLIPTextEncode", 924, "Encode identity/detail restoration prompt", (650, 260), [""]
+    ))
+    restoration_zero = graph.add(base.clean_node(
+        "ConditioningZeroOut", 925, "Restoration zero negative", (1010, 280)
+    ))
 
     graph.connect(-10, 2, encode["id"], "text", "STRING")
     graph.connect(clip["id"], 0, encode["id"], "clip", "CLIP")
     graph.connect(encode["id"], 0, zero["id"], "conditioning", "CONDITIONING")
+    graph.connect(-10, 3, restoration_encode["id"], "text", "STRING")
+    graph.connect(clip["id"], 0, restoration_encode["id"], "clip", "CLIP")
+    graph.connect(restoration_encode["id"], 0, restoration_zero["id"], "conditioning", "CONDITIONING")
     graph.connect(-10, 0, source_scale["id"], "image", "IMAGE")
     graph.connect(-10, 1, previous_scale["id"], "image", "IMAGE")
     for target in (source_scale, previous_scale):
-        graph.connect(-10, 5, target["id"], "width", "INT")
-        graph.connect(-10, 5, target["id"], "height", "INT")
+        graph.connect(-10, 7, target["id"], "width", "INT")
+        graph.connect(-10, 7, target["id"], "height", "INT")
     graph.connect(source_scale["id"], 0, source_latent["id"], "pixels", "IMAGE")
     graph.connect(previous_scale["id"], 0, previous_latent["id"], "pixels", "IMAGE")
     graph.connect(vae["id"], 0, source_latent["id"], "vae", "VAE")
     graph.connect(vae["id"], 0, previous_latent["id"], "vae", "VAE")
-    graph.connect(encode["id"], 0, positive_ref["id"], "conditioning", "CONDITIONING")
-    graph.connect(zero["id"], 0, negative_ref["id"], "conditioning", "CONDITIONING")
+    graph.connect(restoration_encode["id"], 0, positive_ref["id"], "conditioning", "CONDITIONING")
+    graph.connect(restoration_zero["id"], 0, negative_ref["id"], "conditioning", "CONDITIONING")
     graph.connect(source_latent["id"], 0, positive_ref["id"], "latent", "LATENT")
     graph.connect(source_latent["id"], 0, negative_ref["id"], "latent", "LATENT")
-    graph.connect(encode["id"], 0, positive_switch["id"], "on_false", "CONDITIONING")
-    graph.connect(positive_ref["id"], 0, positive_switch["id"], "on_true", "CONDITIONING")
-    graph.connect(zero["id"], 0, negative_switch["id"], "on_false", "CONDITIONING")
-    graph.connect(negative_ref["id"], 0, negative_switch["id"], "on_true", "CONDITIONING")
-    graph.connect(-10, 8, positive_switch["id"], "switch", "BOOLEAN")
-    graph.connect(-10, 8, negative_switch["id"], "switch", "BOOLEAN")
-    graph.connect(model["id"], 0, guider["id"], "model", "MODEL")
-    graph.connect(positive_switch["id"], 0, guider["id"], "positive", "CONDITIONING")
-    graph.connect(negative_switch["id"], 0, guider["id"], "negative", "CONDITIONING")
-    graph.connect(-10, 7, guider["id"], "cfg", "FLOAT")
-    graph.connect(-10, 6, scheduler["id"], "steps", "INT")
-    graph.connect(-10, 5, scheduler["id"], "width", "INT")
-    graph.connect(-10, 5, scheduler["id"], "height", "INT")
-    graph.connect(scheduler["id"], 0, split["id"], "sigmas", "SIGMAS")
-    graph.connect(-10, 4, split["id"], "denoise", "FLOAT")
-    graph.connect(-10, 3, noise["id"], "noise_seed", "INT")
-    graph.connect(noise["id"], 0, sample["id"], "noise", "NOISE")
-    graph.connect(guider["id"], 0, sample["id"], "guider", "GUIDER")
-    graph.connect(sampler["id"], 0, sample["id"], "sampler", "SAMPLER")
-    graph.connect(split["id"], 1, sample["id"], "sigmas", "SIGMAS")
-    graph.connect(previous_latent["id"], 0, sample["id"], "latent_image", "LATENT")
-    graph.connect(sample["id"], 0, decode["id"], "samples", "LATENT")
-    graph.connect(vae["id"], 0, decode["id"], "vae", "VAE")
-    graph.connect(decode["id"], 0, -20, 0, "IMAGE")
+    graph.connect(model["id"], 0, composition_guider["id"], "model", "MODEL")
+    graph.connect(encode["id"], 0, composition_guider["id"], "positive", "CONDITIONING")
+    graph.connect(zero["id"], 0, composition_guider["id"], "negative", "CONDITIONING")
+    graph.connect(-10, 10, composition_guider["id"], "cfg", "FLOAT")
+    graph.connect(-10, 8, composition_scheduler["id"], "steps", "INT")
+    graph.connect(-10, 7, composition_scheduler["id"], "width", "INT")
+    graph.connect(-10, 7, composition_scheduler["id"], "height", "INT")
+    graph.connect(composition_scheduler["id"], 0, composition_split["id"], "sigmas", "SIGMAS")
+    graph.connect(-10, 5, composition_split["id"], "denoise", "FLOAT")
+    graph.connect(-10, 4, noise["id"], "noise_seed", "INT")
+    graph.connect(noise["id"], 0, composition_sample["id"], "noise", "NOISE")
+    graph.connect(composition_guider["id"], 0, composition_sample["id"], "guider", "GUIDER")
+    graph.connect(sampler["id"], 0, composition_sample["id"], "sampler", "SAMPLER")
+    graph.connect(composition_split["id"], 1, composition_sample["id"], "sigmas", "SIGMAS")
+    graph.connect(previous_latent["id"], 0, composition_sample["id"], "latent_image", "LATENT")
+    graph.connect(composition_sample["id"], 0, composition_decode["id"], "samples", "LATENT")
+    graph.connect(vae["id"], 0, composition_decode["id"], "vae", "VAE")
+
+    graph.connect(model["id"], 0, restoration_guider["id"], "model", "MODEL")
+    graph.connect(positive_ref["id"], 0, restoration_guider["id"], "positive", "CONDITIONING")
+    graph.connect(negative_ref["id"], 0, restoration_guider["id"], "negative", "CONDITIONING")
+    graph.connect(-10, 10, restoration_guider["id"], "cfg", "FLOAT")
+    graph.connect(-10, 9, restoration_scheduler["id"], "steps", "INT")
+    graph.connect(-10, 7, restoration_scheduler["id"], "width", "INT")
+    graph.connect(-10, 7, restoration_scheduler["id"], "height", "INT")
+    graph.connect(restoration_scheduler["id"], 0, restoration_split["id"], "sigmas", "SIGMAS")
+    graph.connect(-10, 6, restoration_split["id"], "denoise", "FLOAT")
+    graph.connect(noise["id"], 0, restoration_sample["id"], "noise", "NOISE")
+    graph.connect(restoration_guider["id"], 0, restoration_sample["id"], "guider", "GUIDER")
+    graph.connect(sampler["id"], 0, restoration_sample["id"], "sampler", "SAMPLER")
+    graph.connect(restoration_split["id"], 1, restoration_sample["id"], "sigmas", "SIGMAS")
+    graph.connect(composition_sample["id"], 0, restoration_sample["id"], "latent_image", "LATENT")
+    graph.connect(restoration_sample["id"], 0, restoration_decode["id"], "samples", "LATENT")
+    graph.connect(vae["id"], 0, restoration_decode["id"], "vae", "VAE")
+    graph.connect(composition_decode["id"], 0, -20, 0, "IMAGE")
+    graph.connect(restoration_decode["id"], 0, -20, 1, "IMAGE")
     return graph_id, base.make_subgraph(
         graph_id,
-        "MiracleIn realistic progression — previous image plus optional original anchor",
-        [("source_image", "IMAGE"), ("previous_image", "IMAGE"), ("render_prompt", "STRING"),
-         ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("steps", "INT"),
-         ("guidance", "FLOAT"), ("use_original_anchor", "BOOLEAN")],
-        [("image", "IMAGE")],
+        "MiracleIn two-pass progression — composition then identity/detail restoration",
+        [("source_image", "IMAGE"), ("previous_image", "IMAGE"), ("composition_prompt", "STRING"),
+         ("restoration_prompt", "STRING"), ("seed", "INT"),
+         ("composition_denoise", "FLOAT"), ("restoration_denoise", "FLOAT"),
+         ("size", "INT"), ("composition_steps", "INT"), ("restoration_steps", "INT"),
+         ("guidance", "FLOAT")],
+        [("composition_image", "IMAGE"), ("image", "IMAGE")],
         graph,
-        2050,
+        2800,
     )
 
 
@@ -1053,13 +1087,13 @@ def build_realistic_progression_workflow():
     renderer_id, renderer_def = progression_realistic_renderer_subgraph()
     graph = base.Graph(object_links=False)
     graph.add(base.clean_node("MarkdownNote", 5001, "How this workflow works", (-1420, -500), [
-        "# REALISTIC ACTOR PROGRESSION\n\nThe Qwen3-VL 8B director studies the source once and writes detailed, self-contained photographic states. MiracleIn 3.0 / Flux.2 Klein 9B then renders every state at full quality, starting from the preceding image for continuity.\n\nPlanning language and stage numbers stay in metadata; the image encoder receives only the current still-image composition. This workflow contains no drawing-style adapter or style treatment."
+        "# TWO-PASS REALISTIC ACTOR PROGRESSION\n\nThe Qwen3-VL 8B director studies the source once and writes self-contained photographic states. For every state, MiracleIn first establishes the requested new pose and composition without the original-reference anchor. A second low-denoise pass starts from that accepted composition and introduces the original photograph only as an identity/detail reference.\n\nBoth the composition candidate and restored final are saved, making it possible to see exactly what the identity pass changes. The restored final—not the raw candidate—is carried into the next stage."
     ], (760, 370)))
     graph.add(base.clean_node("MarkdownNote", 5002, "Quality and continuity controls", (-620, -500), [
-        "## QUALITY CONTROLS\n\n**Square render size** — 800 is the proven unrestricted-workflow default. Use 1024 for maximum detail at substantially greater cost.\n\n**Steps** — 40 matches the high-power MiracleIn preset. Try 30 if the extra time produces little visible gain.\n\n**Guidance** — 2.0 matches the unrestricted renderer. Large increases can make skin and anatomy harsher rather than better.\n\n**Previous-image denoise** — 0.82 is the starting point for meaningful recomposition. Raise toward 0.9 if stages still cling to the preceding pose; lower only if identity drift becomes unacceptable.\n\n**Permanent original anchor** — leave this OFF for progression. It anchors pose and framing as well as identity, so combining it with a low denoise produces blinking, expression changes, and zooms instead of new scenes.\n\n**Render seed** — one randomized seed is reused for every stage. This improves visual continuity without attaching the original composition to every render."
+        "## TWO-PASS CONTROLS\n\n**Composition denoise** — 0.88 gives the first pass enough freedom to change pose, activity, camera, and setting. Raise toward 0.94 if it still clings to the prior image; lower toward 0.82 if continuity collapses.\n\n**Identity/detail denoise** — 0.30 limits the original-reference pass mostly to faces, texture, hands, and local anatomy. Lower it if composition moves backward; raise it cautiously if identity restoration is too weak.\n\n**Composition steps** — 36 supplies the main render. **Identity/detail steps** — 24 defines a sufficiently fine schedule, but low denoise means only its final portion is sampled.\n\n**Render seed** — one randomized seed is reused throughout the run. This provides continuity without permanently attaching the original pose."
     ], (780, 500)))
     graph.add(base.clean_node("MarkdownNote", 5003, "Limits and outputs", (200, -500), [
-        "## OUTPUTS AND LIMITS\n\nRuns are saved beneath `output/actor-progression-realistic/<run-id>/`, including the source and numbered PNGs. Each PNG stores the complete plan, current stage, actual render prompt, seeds, and runtime settings.\n\nCrowded source photographs remain intrinsically difficult: seven simultaneous identities and bodies are much harder than the one- or two-person unrestricted workflows. The director limits close physical contact to three people at once and places others separately to reduce fused anatomy."
+        "## OUTPUTS AND LIMITS\n\nRuns are saved beneath `output/actor-progression-realistic/<run-id>/`. `stage_NNN_of_NNN_composition.png` is the unrestricted first pass; the matching filename without a suffix is the restored final. Both retain the complete plan and render context in PNG metadata.\n\nThis is full-frame restoration, not masked surgery. It can improve recognizable faces and local defects while preserving the new latent composition, but it cannot reliably untangle a severely fused body. A detector-driven face/detailer package is the next upgrade for true regional repair."
     ], (760, 430)))
     source = graph.add(base.clean_node("LoadImage", 5004, "SOURCE IMAGE", (-1420, 30), [
         "285272_10150249358833860_752333859_7503903_5008875_n.jpg", "image"
@@ -1070,11 +1104,16 @@ def build_realistic_progression_workflow():
     count = graph.add(base.clean_node("PrimitiveInt", 5006, "Number of stages", (-1020, 330), [10, "fixed"]))
     director_seed = graph.add(base.clean_node("SeedNode", 5007, "Director seed", (-1020, 470), [550926079854635, "randomize"]))
     render_seed = graph.add(base.clean_node("SeedNode", 5008, "Render seed — fixed across stages", (-1020, 610), [948000148735247, "randomize"]))
-    denoise = graph.add(base.clean_node("PrimitiveFloat", 5009, "Previous-image denoise", (-650, 320), [0.82]))
+    denoise = graph.add(base.clean_node("PrimitiveFloat", 5009, "Pass 1 — composition denoise", (-650, 320), [0.88]))
     size = graph.add(base.clean_node("PrimitiveInt", 5010, "Square render size", (-650, 450), [800, "fixed"]))
-    steps = graph.add(base.clean_node("PrimitiveInt", 5011, "Sampling steps", (-650, 580), [40, "fixed"]))
+    steps = graph.add(base.clean_node("PrimitiveInt", 5011, "Pass 1 — composition steps", (-650, 580), [36, "fixed"]))
     guidance = graph.add(base.clean_node("PrimitiveFloat", 5012, "Guidance", (-650, 710), [2.0]))
-    original_anchor = graph.add(base.clean_node("PrimitiveBoolean", 5013, "Use permanent original anchor", (-650, 840), [False]))
+    restoration_denoise = graph.add(base.clean_node(
+        "PrimitiveFloat", 5013, "Pass 2 — identity/detail denoise", (-650, 840), [0.30]
+    ))
+    restoration_steps = graph.add(base.clean_node(
+        "PrimitiveInt", 5028, "Pass 2 — identity/detail steps", (-650, 970), [24, "fixed"]
+    ))
     director = graph.add(base.subgraph_node(
         5014, director_id, "Plan detailed photographic progression once", (-240, 20),
         [("source_image", "IMAGE"), ("direction", "STRING"), ("count", "INT"), ("seed", "INT")],
@@ -1093,14 +1132,17 @@ def build_realistic_progression_workflow():
     stage = graph.add(story_node(
         "RealisticProgressionStageAtIndex", 5019, "Current detailed photographic state", (1110, 20),
         [("scenario", "STRING", False), ("snapshot", "STRING", False), ("index", "INT", False)],
-        [("stage_prompt", "STRING"), ("render_prompt", "STRING")], [], (460, 150)
+        [("stage_prompt", "STRING"), ("composition_prompt", "STRING"),
+         ("restoration_prompt", "STRING")], [], (460, 180)
     ))
     renderer = graph.add(base.subgraph_node(
         5021, renderer_id, "MiracleIn full-quality realistic renderer", (1620, 20),
-        [("source_image", "IMAGE"), ("previous_image", "IMAGE"), ("render_prompt", "STRING"),
-         ("seed", "INT"), ("denoise", "FLOAT"), ("size", "INT"), ("steps", "INT"),
-         ("guidance", "FLOAT"), ("use_original_anchor", "BOOLEAN")],
-        [("image", "IMAGE")], (560, 310)
+        [("source_image", "IMAGE"), ("previous_image", "IMAGE"), ("composition_prompt", "STRING"),
+         ("restoration_prompt", "STRING"), ("seed", "INT"),
+         ("composition_denoise", "FLOAT"), ("restoration_denoise", "FLOAT"),
+         ("size", "INT"), ("composition_steps", "INT"), ("restoration_steps", "INT"),
+         ("guidance", "FLOAT")],
+        [("composition_image", "IMAGE"), ("image", "IMAGE")], (620, 350)
     ))
     settings_text = json.dumps({
         "pipeline": "actor-progression-escalation-loop-realistic",
@@ -1108,12 +1150,19 @@ def build_realistic_progression_workflow():
                      "thinking": False, "vision_size": 768},
         "renderer": {"model": "miraclein309bFp8.aUKt", "family": "flux2-klein-9b",
                      "text_encoder": "qwen_3_8b", "vae": "flux2-vae", "lora": None,
-                     "sampler": "euler"},
+                     "sampler": "euler", "passes": ["composition", "identity_detail_restoration"],
+                     "original_reference": "restoration_pass_only"},
     }, indent=2)
     settings = graph.add(base.clean_node("TextBox1", 5022, "Recorded pipeline settings", (1620, 370), [settings_text], (560, 340)))
     no_adapter = graph.add(base.clean_node("PrimitiveFloat", 5023, "Adapter strength — none", (1620, 750), [0.0]))
-    save = graph.add(story_node(
-        "SaveProgressionFrame", 5024, "Save realistic stage with complete context", (2240, 20),
+    no_anchor = graph.add(base.clean_node(
+        "PrimitiveBoolean", 5032, "Composition pass original reference — off", (1620, 880), [False]
+    ))
+    restoration_anchor = graph.add(base.clean_node(
+        "PrimitiveBoolean", 5033, "Restoration pass original reference — on", (1620, 1010), [True]
+    ))
+    composition_save = graph.add(story_node(
+        "SaveProgressionFrame", 5030, "Save pre-restoration composition candidate", (2240, 560),
         [("image", "IMAGE", False), ("source_image", "IMAGE", False), ("run_id", "STRING", False),
          ("stage_index", "INT", False), ("stage_count", "INT", False), ("scenario", "STRING", False),
          ("plan_snapshot", "STRING", False), ("stage_prompt", "STRING", False),
@@ -1121,12 +1170,36 @@ def build_realistic_progression_workflow():
          ("render_seed", "INT", False), ("settings_json", "STRING", False),
          ("denoise", "FLOAT", False), ("size", "INT", False), ("lora_strength", "FLOAT", False),
          ("use_original_anchor", "BOOLEAN", False), ("progression_root", "STRING", True),
-         ("steps", "INT", False), ("guidance", "FLOAT", False)],
-        [("image", "IMAGE"), ("saved_path", "STRING")], ["actor-progression-realistic"], (540, 500)
+         ("steps", "INT", False), ("guidance", "FLOAT", False), ("pass_name", "STRING", True),
+         ("composition_denoise", "FLOAT", False), ("restoration_denoise", "FLOAT", False),
+         ("composition_steps", "INT", False), ("restoration_steps", "INT", False)],
+        [("image", "IMAGE"), ("saved_path", "STRING")],
+        ["actor-progression-realistic", "composition"], (540, 520)
+    ))
+    composition_path = graph.add(base.clean_node(
+        "PreviewAny", 5031, "Last composition candidate path", (2840, 600), []
+    ))
+    save = graph.add(story_node(
+        "SaveProgressionFrame", 5024, "Save restored stage with complete context", (2240, 20),
+        [("image", "IMAGE", False), ("source_image", "IMAGE", False), ("run_id", "STRING", False),
+         ("stage_index", "INT", False), ("stage_count", "INT", False), ("scenario", "STRING", False),
+         ("plan_snapshot", "STRING", False), ("stage_prompt", "STRING", False),
+         ("render_prompt", "STRING", False), ("director_seed", "INT", False),
+         ("render_seed", "INT", False), ("settings_json", "STRING", False),
+         ("denoise", "FLOAT", False), ("size", "INT", False), ("lora_strength", "FLOAT", False),
+         ("use_original_anchor", "BOOLEAN", False), ("progression_root", "STRING", True),
+         ("steps", "INT", False), ("guidance", "FLOAT", False), ("pass_name", "STRING", True),
+         ("composition_denoise", "FLOAT", False), ("restoration_denoise", "FLOAT", False),
+         ("composition_steps", "INT", False), ("restoration_steps", "INT", False)],
+        [("image", "IMAGE"), ("saved_path", "STRING")],
+        ["actor-progression-realistic", "final"], (540, 520)
     ))
     path = graph.add(base.clean_node("PreviewAny", 5025, "Last saved realistic image path", (2840, 20), []))
     loop_end = graph.add(base.clean_node("easy forLoopEnd", 5026, "Carry realistic image into next iteration", (2840, 230), []))
-    preview = graph.add(base.clean_node("PreviewImage", 5027, "Last realistic progression image", (3210, 190), []))
+    preview = graph.add(base.clean_node("PreviewImage", 5027, "Last restored progression image", (3210, 190), []))
+    composition_preview = graph.add(base.clean_node(
+        "PreviewImage", 5029, "Last pre-restoration composition", (3210, 570), []
+    ))
 
     graph.connect(source["id"], 0, director["id"], "source_image", "IMAGE")
     graph.connect(direction["id"], 0, director["id"], "direction", "STRING")
@@ -1145,14 +1218,16 @@ def build_realistic_progression_workflow():
     graph.connect(loop["id"], 1, stage["id"], "index", "INT")
     graph.connect(source["id"], 0, renderer["id"], "source_image", "IMAGE")
     graph.connect(loop["id"], 2, renderer["id"], "previous_image", "IMAGE")
-    graph.connect(stage["id"], 1, renderer["id"], "render_prompt", "STRING")
+    graph.connect(stage["id"], 1, renderer["id"], "composition_prompt", "STRING")
+    graph.connect(stage["id"], 2, renderer["id"], "restoration_prompt", "STRING")
     graph.connect(render_seed["id"], 0, renderer["id"], "seed", "INT")
-    graph.connect(denoise["id"], 0, renderer["id"], "denoise", "FLOAT")
+    graph.connect(denoise["id"], 0, renderer["id"], "composition_denoise", "FLOAT")
+    graph.connect(restoration_denoise["id"], 0, renderer["id"], "restoration_denoise", "FLOAT")
     graph.connect(size["id"], 0, renderer["id"], "size", "INT")
-    graph.connect(steps["id"], 0, renderer["id"], "steps", "INT")
+    graph.connect(steps["id"], 0, renderer["id"], "composition_steps", "INT")
+    graph.connect(restoration_steps["id"], 0, renderer["id"], "restoration_steps", "INT")
     graph.connect(guidance["id"], 0, renderer["id"], "guidance", "FLOAT")
-    graph.connect(original_anchor["id"], 0, renderer["id"], "use_original_anchor", "BOOLEAN")
-    graph.connect(renderer["id"], 0, save["id"], "image", "IMAGE")
+    graph.connect(renderer["id"], 1, save["id"], "image", "IMAGE")
     graph.connect(source["id"], 0, save["id"], "source_image", "IMAGE")
     graph.connect(run_id["id"], 0, save["id"], "run_id", "STRING")
     graph.connect(loop["id"], 1, save["id"], "stage_index", "INT")
@@ -1160,16 +1235,44 @@ def build_realistic_progression_workflow():
     graph.connect(director["id"], 0, save["id"], "scenario", "STRING")
     graph.connect(director["id"], 1, save["id"], "plan_snapshot", "STRING")
     graph.connect(stage["id"], 0, save["id"], "stage_prompt", "STRING")
-    graph.connect(stage["id"], 1, save["id"], "render_prompt", "STRING")
+    graph.connect(stage["id"], 2, save["id"], "render_prompt", "STRING")
     graph.connect(director_seed["id"], 0, save["id"], "director_seed", "INT")
     graph.connect(render_seed["id"], 0, save["id"], "render_seed", "INT")
     graph.connect(settings["id"], 0, save["id"], "settings_json", "STRING")
-    graph.connect(denoise["id"], 0, save["id"], "denoise", "FLOAT")
+    graph.connect(restoration_denoise["id"], 0, save["id"], "denoise", "FLOAT")
     graph.connect(size["id"], 0, save["id"], "size", "INT")
     graph.connect(no_adapter["id"], 0, save["id"], "lora_strength", "FLOAT")
-    graph.connect(original_anchor["id"], 0, save["id"], "use_original_anchor", "BOOLEAN")
-    graph.connect(steps["id"], 0, save["id"], "steps", "INT")
+    graph.connect(restoration_anchor["id"], 0, save["id"], "use_original_anchor", "BOOLEAN")
+    graph.connect(restoration_steps["id"], 0, save["id"], "steps", "INT")
     graph.connect(guidance["id"], 0, save["id"], "guidance", "FLOAT")
+    graph.connect(denoise["id"], 0, save["id"], "composition_denoise", "FLOAT")
+    graph.connect(restoration_denoise["id"], 0, save["id"], "restoration_denoise", "FLOAT")
+    graph.connect(steps["id"], 0, save["id"], "composition_steps", "INT")
+    graph.connect(restoration_steps["id"], 0, save["id"], "restoration_steps", "INT")
+    graph.connect(renderer["id"], 0, composition_save["id"], "image", "IMAGE")
+    graph.connect(source["id"], 0, composition_save["id"], "source_image", "IMAGE")
+    graph.connect(run_id["id"], 0, composition_save["id"], "run_id", "STRING")
+    graph.connect(loop["id"], 1, composition_save["id"], "stage_index", "INT")
+    graph.connect(director["id"], 2, composition_save["id"], "stage_count", "INT")
+    graph.connect(director["id"], 0, composition_save["id"], "scenario", "STRING")
+    graph.connect(director["id"], 1, composition_save["id"], "plan_snapshot", "STRING")
+    graph.connect(stage["id"], 0, composition_save["id"], "stage_prompt", "STRING")
+    graph.connect(stage["id"], 1, composition_save["id"], "render_prompt", "STRING")
+    graph.connect(director_seed["id"], 0, composition_save["id"], "director_seed", "INT")
+    graph.connect(render_seed["id"], 0, composition_save["id"], "render_seed", "INT")
+    graph.connect(settings["id"], 0, composition_save["id"], "settings_json", "STRING")
+    graph.connect(denoise["id"], 0, composition_save["id"], "denoise", "FLOAT")
+    graph.connect(size["id"], 0, composition_save["id"], "size", "INT")
+    graph.connect(no_adapter["id"], 0, composition_save["id"], "lora_strength", "FLOAT")
+    graph.connect(no_anchor["id"], 0, composition_save["id"], "use_original_anchor", "BOOLEAN")
+    graph.connect(steps["id"], 0, composition_save["id"], "steps", "INT")
+    graph.connect(guidance["id"], 0, composition_save["id"], "guidance", "FLOAT")
+    graph.connect(denoise["id"], 0, composition_save["id"], "composition_denoise", "FLOAT")
+    graph.connect(restoration_denoise["id"], 0, composition_save["id"], "restoration_denoise", "FLOAT")
+    graph.connect(steps["id"], 0, composition_save["id"], "composition_steps", "INT")
+    graph.connect(restoration_steps["id"], 0, composition_save["id"], "restoration_steps", "INT")
+    graph.connect(composition_save["id"], 1, composition_path["id"], 0, "*")
+    graph.connect(composition_save["id"], 0, composition_preview["id"], 0, "IMAGE")
     graph.connect(save["id"], 1, path["id"], 0, "*")
     graph.connect(loop["id"], 0, loop_end["id"], 0, "FLOW_CONTROL")
     graph.connect(save["id"], 0, loop_end["id"], 1, "IMAGE")
