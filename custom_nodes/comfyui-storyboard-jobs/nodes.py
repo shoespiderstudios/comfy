@@ -893,6 +893,35 @@ The text after every STAGE label must be a self-contained description of one fro
         return (prompt,)
 
 
+class BuildRealisticProgressionPlanPrompt:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "direction": ("STRING", {"forceInput": True}),
+                "count": ("INT", {"forceInput": True, "min": 2, "max": 20}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("prompt",)
+    FUNCTION = "build"
+    CATEGORY = "Progression Jobs"
+
+    def build(self, direction, count):
+        prompt = f"""Study the attached source photograph. All depicted people are adults. Build a high-quality photographic progression while preserving every continuing person's recognizable identity, apparent age, body type, and distinguishing visible traits.
+
+PROGRESSION DIRECTION:
+{direction}
+
+Plan exactly {int(count)} substantially different dramatic beats. First output one short SCENARIO: line containing only the shared setting and premise. It must not mention frames, stages, sequences, panels, storyboards, or the requested count. Then output exactly one line per stage beginning STAGE 1:, STAGE 2:, and so on.
+
+After each STAGE label, write a self-contained 55-to-80-word description of one photorealistic still image. State the complete composition as it visibly exists at one instant: identify people by stable visual descriptors rather than unanchored pronouns; give each person's location, whole-body pose, orientation, visible action, clothing state, and spatial relationship; then specify camera framing, environment, and motivated photographic lighting. Use direct concrete language suitable for a high-capacity image model.
+
+Describe static end states, never trajectories or editing instructions. Inside stage descriptions do not use sequence vocabulary such as previous, next, before, after, progression, culmination, frame, panel, or sequence. Every state must differ decisively through whole-body pose, activity, location, camera position, or a major environmental condition; the first must already depart clearly from the source. Keep bodies distinct, limb ownership obvious, joints plausible, and weight supported. Avoid crowds of tangled bodies, vague collective actions, extreme foreshortening, obstructed anatomy, mirrors, and ambiguous overlaps. No more than three people should be in close physical contact at once; place any others separately and explicitly. Do not write analysis, alternatives, extra headings, blank lines, or continuation lines."""
+        return (prompt,)
+
+
 class ParseProgressionPlan:
     @classmethod
     def INPUT_TYPES(cls):
@@ -983,6 +1012,22 @@ class ProgressionStageAtIndex:
         return (stage, render_prompt)
 
 
+class RealisticProgressionStageAtIndex(ProgressionStageAtIndex):
+    def get(self, scenario, snapshot, index):
+        stages = json.loads(snapshot)
+        if index < 0 or index >= len(stages):
+            raise IndexError(f"Progression index {index} is outside a plan of {len(stages)} stages")
+        stage = str(stages[index])
+        render_prompt = (
+            f"Photorealistic high-end editorial photograph: {stage}\n"
+            "One unified scene captured at one instant from one camera viewpoint, filling the entire square canvas. "
+            "Each person appears exactly once with a distinct body, clearly owned limbs, plausible joints, supported "
+            "weight, natural skin texture, realistic fabric and material detail, coherent perspective, controlled "
+            "depth of field, and professionally motivated lighting."
+        )
+        return (stage, render_prompt)
+
+
 class ProgressionRunId:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1037,6 +1082,10 @@ class SaveProgressionFrame:
                 "use_original_anchor": ("BOOLEAN", {"forceInput": True}),
                 "progression_root": ("STRING", {"default": "actor-progression"}),
             },
+            "optional": {
+                "steps": ("INT", {"forceInput": True, "min": 1, "max": 1000}),
+                "guidance": ("FLOAT", {"forceInput": True, "min": 0.0, "max": 100.0}),
+            },
             "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
@@ -1053,7 +1102,7 @@ class SaveProgressionFrame:
     def save(self, image, source_image, run_id, stage_index, stage_count, scenario,
              plan_snapshot, stage_prompt, render_prompt, director_seed, render_seed,
              settings_json, denoise, size, lora_strength, use_original_anchor,
-             progression_root, prompt=None, extra_pnginfo=None):
+             progression_root, steps=None, guidance=None, prompt=None, extra_pnginfo=None):
         if not re.fullmatch(r"progression_[A-Za-z0-9_-]+", str(run_id)):
             raise ValueError("Invalid progression run ID")
         root = _safe_root(progression_root)
@@ -1072,6 +1121,10 @@ class SaveProgressionFrame:
             "lora_strength": float(lora_strength),
             "use_original_anchor": bool(use_original_anchor),
         }
+        if steps is not None:
+            settings["runtime"]["steps"] = int(steps)
+        if guidance is not None:
+            settings["runtime"]["guidance"] = float(guidance)
         try:
             plan = json.loads(plan_snapshot)
         except json.JSONDecodeError as exc:
@@ -1126,8 +1179,10 @@ NODE_CLASS_MAPPINGS = {
     "ActorSceneCardAtIndex": ActorSceneCardAtIndex,
     "SetActorCandidateFinalPrompt": SetActorCandidateFinalPrompt,
     "BuildProgressionPlanPrompt": BuildProgressionPlanPrompt,
+    "BuildRealisticProgressionPlanPrompt": BuildRealisticProgressionPlanPrompt,
     "ParseProgressionPlan": ParseProgressionPlan,
     "ProgressionStageAtIndex": ProgressionStageAtIndex,
+    "RealisticProgressionStageAtIndex": RealisticProgressionStageAtIndex,
     "ProgressionRunId": ProgressionRunId,
     "SaveProgressionFrame": SaveProgressionFrame,
 }
@@ -1151,8 +1206,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ActorSceneCardAtIndex": "Scene Card at Index",
     "SetActorCandidateFinalPrompt": "Record Final Actor Prompt",
     "BuildProgressionPlanPrompt": "Build Progression Plan Prompt",
+    "BuildRealisticProgressionPlanPrompt": "Build Realistic Progression Plan Prompt",
     "ParseProgressionPlan": "Parse Progression Plan",
     "ProgressionStageAtIndex": "Progression Stage at Index",
+    "RealisticProgressionStageAtIndex": "Realistic Progression Stage at Index",
     "ProgressionRunId": "Create Progression Run ID",
     "SaveProgressionFrame": "Save Progression Frame",
 }

@@ -10,6 +10,7 @@ NAMES = (
     "actor-finalize-fresh-render.json",
     "actor-finalize-hybrid.json",
     "actor-progression-escalation-loop.json",
+    "actor-progression-escalation-loop-realistic.json",
 )
 
 

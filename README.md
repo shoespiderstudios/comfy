@@ -16,6 +16,7 @@ Locally developed nodes required by these workflows live in [`custom_nodes/`](cu
 - `actor-finalize-fresh-render.json` refines the selected direction and renders from fresh 1024px noise.
 - `actor-finalize-hybrid.json` refines the selected direction and reconstructs the sketch at 0.85 denoise.
 - `actor-progression-escalation-loop.json` plans a complete source-aware progression once, then carries each pencil-sketch stage into the next render; an optional permanent source anchor can be enabled if identity drift becomes excessive.
+- `actor-progression-escalation-loop-realistic.json` uses the 8B vision director and the full MiracleIn 9B rendering stack to produce detailed 800px photographic progression images with no sketch adapter or treatment.
 
 The sketch workflow writes portable candidates beneath `output/actor-pipeline`. Move approved candidate PNGs from `inbox` to `selected`, while leaving their matching actor files in `actors`. Each finalizer reads the same selected set and writes to its own strategy directory.
 
