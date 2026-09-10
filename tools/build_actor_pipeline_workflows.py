@@ -1056,7 +1056,7 @@ def build_realistic_progression_workflow():
         "# REALISTIC ACTOR PROGRESSION\n\nThe Qwen3-VL 8B director studies the source once and writes detailed, self-contained photographic states. MiracleIn 3.0 / Flux.2 Klein 9B then renders every state at full quality, starting from the preceding image for continuity.\n\nPlanning language and stage numbers stay in metadata; the image encoder receives only the current still-image composition. This workflow contains no drawing-style adapter or style treatment."
     ], (760, 370)))
     graph.add(base.clean_node("MarkdownNote", 5002, "Quality and continuity controls", (-620, -500), [
-        "## QUALITY CONTROLS\n\n**Square render size** — 800 is the proven unrestricted-workflow default. Use 1024 for maximum detail at substantially greater cost.\n\n**Steps** — 40 matches the high-power MiracleIn preset. Try 30 if the extra time produces little visible gain.\n\n**Guidance** — 2.0 matches the unrestricted renderer. Large increases can make skin and anatomy harsher rather than better.\n\n**Previous-image denoise** — 0.82 balances continuity and change. Raise toward 0.9 if stages cling to the preceding composition; lower toward 0.7 if identities drift.\n\n**Permanent original anchor** — OFF is recommended. The preceding image already carries identity forward; enabling this may pull every stage back toward the original group pose."
+        "## QUALITY CONTROLS\n\n**Square render size** — 800 is the proven unrestricted-workflow default. Use 1024 for maximum detail at substantially greater cost.\n\n**Steps** — 40 matches the high-power MiracleIn preset. Try 30 if the extra time produces little visible gain.\n\n**Guidance** — 2.0 matches the unrestricted renderer. Large increases can make skin and anatomy harsher rather than better.\n\n**Previous-image denoise** — 0.82 is the starting point for meaningful recomposition. Raise toward 0.9 if stages still cling to the preceding pose; lower only if identity drift becomes unacceptable.\n\n**Permanent original anchor** — leave this OFF for progression. It anchors pose and framing as well as identity, so combining it with a low denoise produces blinking, expression changes, and zooms instead of new scenes.\n\n**Render seed** — one randomized seed is reused for every stage. This improves visual continuity without attaching the original composition to every render."
     ], (780, 500)))
     graph.add(base.clean_node("MarkdownNote", 5003, "Limits and outputs", (200, -500), [
         "## OUTPUTS AND LIMITS\n\nRuns are saved beneath `output/actor-progression-realistic/<run-id>/`, including the source and numbered PNGs. Each PNG stores the complete plan, current stage, actual render prompt, seeds, and runtime settings.\n\nCrowded source photographs remain intrinsically difficult: seven simultaneous identities and bodies are much harder than the one- or two-person unrestricted workflows. The director limits close physical contact to three people at once and places others separately to reduce fused anatomy."
@@ -1069,7 +1069,7 @@ def build_realistic_progression_workflow():
     ], (620, 260)))
     count = graph.add(base.clean_node("PrimitiveInt", 5006, "Number of stages", (-1020, 330), [10, "fixed"]))
     director_seed = graph.add(base.clean_node("SeedNode", 5007, "Director seed", (-1020, 470), [550926079854635, "randomize"]))
-    render_seed = graph.add(base.clean_node("SeedNode", 5008, "Render seed base", (-1020, 610), [948000148735247, "randomize"]))
+    render_seed = graph.add(base.clean_node("SeedNode", 5008, "Render seed — fixed across stages", (-1020, 610), [948000148735247, "randomize"]))
     denoise = graph.add(base.clean_node("PrimitiveFloat", 5009, "Previous-image denoise", (-650, 320), [0.82]))
     size = graph.add(base.clean_node("PrimitiveInt", 5010, "Square render size", (-650, 450), [800, "fixed"]))
     steps = graph.add(base.clean_node("PrimitiveInt", 5011, "Sampling steps", (-650, 580), [40, "fixed"]))
@@ -1095,7 +1095,6 @@ def build_realistic_progression_workflow():
         [("scenario", "STRING", False), ("snapshot", "STRING", False), ("index", "INT", False)],
         [("stage_prompt", "STRING"), ("render_prompt", "STRING")], [], (460, 150)
     ))
-    stage_seed = graph.add(base.clean_node("easy mathInt", 5020, "Stage seed = base + index", (1110, 220), [0, 0, "add"]))
     renderer = graph.add(base.subgraph_node(
         5021, renderer_id, "MiracleIn full-quality realistic renderer", (1620, 20),
         [("source_image", "IMAGE"), ("previous_image", "IMAGE"), ("render_prompt", "STRING"),
@@ -1144,12 +1143,10 @@ def build_realistic_progression_workflow():
     graph.connect(director["id"], 0, stage["id"], "scenario", "STRING")
     graph.connect(director["id"], 1, stage["id"], "snapshot", "STRING")
     graph.connect(loop["id"], 1, stage["id"], "index", "INT")
-    graph.connect(render_seed["id"], 0, stage_seed["id"], 0, "INT")
-    graph.connect(loop["id"], 1, stage_seed["id"], 1, "INT")
     graph.connect(source["id"], 0, renderer["id"], "source_image", "IMAGE")
     graph.connect(loop["id"], 2, renderer["id"], "previous_image", "IMAGE")
     graph.connect(stage["id"], 1, renderer["id"], "render_prompt", "STRING")
-    graph.connect(stage_seed["id"], 0, renderer["id"], "seed", "INT")
+    graph.connect(render_seed["id"], 0, renderer["id"], "seed", "INT")
     graph.connect(denoise["id"], 0, renderer["id"], "denoise", "FLOAT")
     graph.connect(size["id"], 0, renderer["id"], "size", "INT")
     graph.connect(steps["id"], 0, renderer["id"], "steps", "INT")
@@ -1165,7 +1162,7 @@ def build_realistic_progression_workflow():
     graph.connect(stage["id"], 0, save["id"], "stage_prompt", "STRING")
     graph.connect(stage["id"], 1, save["id"], "render_prompt", "STRING")
     graph.connect(director_seed["id"], 0, save["id"], "director_seed", "INT")
-    graph.connect(stage_seed["id"], 0, save["id"], "render_seed", "INT")
+    graph.connect(render_seed["id"], 0, save["id"], "render_seed", "INT")
     graph.connect(settings["id"], 0, save["id"], "settings_json", "STRING")
     graph.connect(denoise["id"], 0, save["id"], "denoise", "FLOAT")
     graph.connect(size["id"], 0, save["id"], "size", "INT")
@@ -1193,7 +1190,8 @@ def main():
         "actor-progression-escalation-loop-realistic.json": build_realistic_progression_workflow(),
     }
     for filename, workflow in workflows.items():
-        path = WF_DIR / filename
+        path = WF_DIR / "loops" / filename if filename.startswith("actor-progression-") else WF_DIR / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(workflow, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
         print(f"{filename}: nodes={len(workflow['nodes'])}, links={len(workflow['links'])}, subgraphs={len(workflow['definitions']['subgraphs'])}, bytes={path.stat().st_size}")
 

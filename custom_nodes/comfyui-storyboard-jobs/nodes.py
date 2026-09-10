@@ -1020,6 +1020,9 @@ class RealisticProgressionStageAtIndex(ProgressionStageAtIndex):
         stage = str(stages[index])
         render_prompt = (
             f"Photorealistic high-end editorial photograph: {stage}\n"
+            "Render the specified state decisively, including every requested change of pose, activity, placement, "
+            "camera viewpoint, clothing, and environment. Identity continuity must not preserve the source pose, "
+            "crop, gaze, expression, or arrangement when the specified state differs. "
             "One unified scene captured at one instant from one camera viewpoint, filling the entire square canvas. "
             "Each person appears exactly once with a distinct body, clearly owned limbs, plausible joints, supported "
             "weight, natural skin texture, realistic fabric and material detail, coherent perspective, controlled "

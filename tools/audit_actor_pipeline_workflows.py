@@ -43,7 +43,7 @@ def audit_graph(nodes, links, object_links):
 
 
 for name in NAMES:
-    path = WF_DIR / name
+    path = WF_DIR / "loops" / name if name.startswith("actor-progression-") else WF_DIR / name
     document = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(document.get("nodes"), list)
     assert isinstance(document.get("links"), list)
